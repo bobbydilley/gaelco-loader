@@ -1,3 +1,133 @@
 #!/usr/bin/env bash
 
-echo Creating appimage...
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BUILD_DIR="${SCRIPT_DIR}/build"
+APPDIR="${SCRIPT_DIR}/Gaelco.AppDir"
+OUTPUT="${SCRIPT_DIR}/Gaelco.AppImage"
+
+LINUXDEPLOY="${SCRIPT_DIR}/linuxdeploy-x86_64"
+
+# ----------------------------------------------------------------------
+# Download linuxdeploy
+# ----------------------------------------------------------------------
+
+if [ ! -f "${LINUXDEPLOY}" ]; then
+    echo "==> Downloading linuxdeploy..."
+
+    wget -O "${LINUXDEPLOY}" \
+        https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+
+    chmod +x "${LINUXDEPLOY}"
+fi
+
+# ----------------------------------------------------------------------
+# Check application
+# ----------------------------------------------------------------------
+
+if [ ! -f "${BUILD_DIR}/gaelco" ]; then
+    echo "ERROR: ${BUILD_DIR}/gaelco not found"
+    exit 1
+fi
+
+if [ ! -f "${BUILD_DIR}/gaelco.so" ]; then
+    echo "ERROR: ${BUILD_DIR}/gaelco.so not found"
+    exit 1
+fi
+
+echo "==> Application architecture:"
+file "${BUILD_DIR}/gaelco"
+file "${BUILD_DIR}/gaelco.so"
+
+# ----------------------------------------------------------------------
+# Create AppDir
+# ----------------------------------------------------------------------
+
+echo "==> Creating AppDir"
+
+rm -rf "${APPDIR}"
+
+mkdir -p "${APPDIR}/usr/bin"
+
+cp "${BUILD_DIR}/gaelco" \
+   "${APPDIR}/usr/bin/gaelco"
+
+cp "${BUILD_DIR}/gaelco.so" \
+   "${APPDIR}/usr/bin/gaelco.so"
+
+chmod +x "${APPDIR}/usr/bin/gaelco"
+
+# ----------------------------------------------------------------------
+# Create AppRun
+# ----------------------------------------------------------------------
+
+cat > "${APPDIR}/AppRun" <<'EOF'
+#!/usr/bin/env bash
+
+HERE="$(dirname "$(readlink -f "$0")")"
+
+export LD_LIBRARY_PATH="${HERE}/usr/lib/i386-linux-gnu:${HERE}/usr/lib:${HERE}/usr/bin:${LD_LIBRARY_PATH:-}"
+
+exec "${HERE}/usr/bin/gaelco" "$@"
+EOF
+
+chmod +x "${APPDIR}/AppRun"
+
+# ----------------------------------------------------------------------
+# Desktop file
+# ----------------------------------------------------------------------
+
+cat > "${APPDIR}/gaelco.desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Gaelco
+Comment=Gaelco Loader
+Exec=gaelco
+Terminal=true
+Categories=Game;
+EOF
+
+# ----------------------------------------------------------------------
+# Run linuxdeploy
+#
+# The application and library are both explicitly supplied so linuxdeploy
+# knows about the two ELF objects that make up the application.
+# ----------------------------------------------------------------------
+
+echo "==> Running linuxdeploy..."
+
+ARCH=i386 \
+    "${LINUXDEPLOY}" \
+    --appdir "${APPDIR}" \
+    --executable "${APPDIR}/usr/bin/gaelco" \
+    --library "${APPDIR}/usr/bin/gaelco.so" \
+    --desktop-file "${APPDIR}/gaelco.desktop"
+
+# ----------------------------------------------------------------------
+# Build AppImage
+# ----------------------------------------------------------------------
+
+echo "==> Building AppImage..."
+
+rm -f "${OUTPUT}"
+
+ARCH=i386 \
+    "${LINUXDEPLOY}" \
+    --appdir "${APPDIR}" \
+    --output appimage
+
+# linuxdeploy normally names it after the application.
+GENERATED="$(find "${SCRIPT_DIR}" -maxdepth 1 -name '*.AppImage' -type f \
+    ! -name "$(basename "${OUTPUT}")" | head -n 1 || true)"
+
+if [ -n "${GENERATED}" ]; then
+    mv "${GENERATED}" "${OUTPUT}"
+fi
+
+echo
+echo "=========================================="
+echo " AppImage created:"
+echo
+echo " ${OUTPUT}"
+echo "=========================================="
