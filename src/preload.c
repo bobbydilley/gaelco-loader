@@ -16,7 +16,10 @@
 #include <string.h>
 #include <stdint.h>
 #include <pthread.h>
+#include <unistd.h>
+#include <sys/mman.h>
 
+#include "filesystem.h"
 
 /*
  * ============================================================================
@@ -32,101 +35,86 @@ int errno = 0;
 
 extern int _errno __attribute__((alias("errno")));
 
-
 /*
  * ============================================================================
  * NVIDIA extension constants
  * ============================================================================
- *
- * Some modern Mesa headers don't expose the old NVIDIA extension constants.
- * Define the ones we use if they aren't already present.
- * ============================================================================
- */
-
-
-/*
- * GL_NV_fence
  */
 
 #ifndef GL_ALL_COMPLETED_NV
-#define GL_ALL_COMPLETED_NV             0x84F2
+#define GL_ALL_COMPLETED_NV 0x84F2
 #endif
 
 #ifndef GL_FENCE_STATUS_NV
-#define GL_FENCE_STATUS_NV              0x84F3
+#define GL_FENCE_STATUS_NV 0x84F3
 #endif
 
 #ifndef GL_FENCE_CONDITION_NV
-#define GL_FENCE_CONDITION_NV           0x84F4
+#define GL_FENCE_CONDITION_NV 0x84F4
 #endif
 
-
-/*
- * GL_NV_register_combiners
- */
-
 #ifndef GL_REGISTER_COMBINERS_NV
-#define GL_REGISTER_COMBINERS_NV        0x8522
+#define GL_REGISTER_COMBINERS_NV 0x8522
 #endif
 
 #ifndef GL_VARIABLE_A_NV
-#define GL_VARIABLE_A_NV                0x8523
+#define GL_VARIABLE_A_NV 0x8523
 #endif
 
 #ifndef GL_VARIABLE_B_NV
-#define GL_VARIABLE_B_NV                0x8524
+#define GL_VARIABLE_B_NV 0x8524
 #endif
 
 #ifndef GL_VARIABLE_C_NV
-#define GL_VARIABLE_C_NV                0x8525
+#define GL_VARIABLE_C_NV 0x8525
 #endif
 
 #ifndef GL_VARIABLE_D_NV
-#define GL_VARIABLE_D_NV                0x8526
+#define GL_VARIABLE_D_NV 0x8526
 #endif
 
 #ifndef GL_VARIABLE_E_NV
-#define GL_VARIABLE_E_NV                0x8527
+#define GL_VARIABLE_E_NV 0x8527
 #endif
 
 #ifndef GL_VARIABLE_F_NV
-#define GL_VARIABLE_F_NV                0x8528
+#define GL_VARIABLE_F_NV 0x8528
 #endif
 
 #ifndef GL_VARIABLE_G_NV
-#define GL_VARIABLE_G_NV                0x8529
+#define GL_VARIABLE_G_NV 0x8529
 #endif
 
 #ifndef GL_CONSTANT_COLOR0_NV
-#define GL_CONSTANT_COLOR0_NV           0x852A
+#define GL_CONSTANT_COLOR0_NV 0x852A
 #endif
 
 #ifndef GL_CONSTANT_COLOR1_NV
-#define GL_CONSTANT_COLOR1_NV           0x852B
+#define GL_CONSTANT_COLOR1_NV 0x852B
 #endif
 
 #ifndef GL_PRIMARY_COLOR_NV
-#define GL_PRIMARY_COLOR_NV             0x852C
+#define GL_PRIMARY_COLOR_NV 0x852C
 #endif
 
 #ifndef GL_SECONDARY_COLOR_NV
-#define GL_SECONDARY_COLOR_NV           0x852D
+#define GL_SECONDARY_COLOR_NV 0x852D
 #endif
 
 #ifndef GL_SPARE0_NV
-#define GL_SPARE0_NV                    0x852E
+#define GL_SPARE0_NV 0x852E
 #endif
 
 #ifndef GL_SPARE1_NV
-#define GL_SPARE1_NV                    0x852F
+#define GL_SPARE1_NV 0x852F
 #endif
 
 #ifndef GL_DISCARD_NV
-#define GL_DISCARD_NV                   0x8530
+#define GL_DISCARD_NV 0x8530
 #endif
 
 #ifndef GL_E_TIMES_F_NV
-#define GL_E_TIMES_F_NV                 0x8531
+#define GL_E_TIMES_F_NV 0x8531
 #endif
 
 #ifndef GL_SPARE0_PLUS_SECONDARY_COLOR_NV
@@ -134,47 +122,47 @@ extern int _errno __attribute__((alias("errno")));
 #endif
 
 #ifndef GL_UNSIGNED_IDENTITY_NV
-#define GL_UNSIGNED_IDENTITY_NV         0x8536
+#define GL_UNSIGNED_IDENTITY_NV 0x8536
 #endif
 
 #ifndef GL_UNSIGNED_INVERT_NV
-#define GL_UNSIGNED_INVERT_NV           0x8537
+#define GL_UNSIGNED_INVERT_NV 0x8537
 #endif
 
 #ifndef GL_EXPAND_NORMAL_NV
-#define GL_EXPAND_NORMAL_NV             0x8538
+#define GL_EXPAND_NORMAL_NV 0x8538
 #endif
 
 #ifndef GL_EXPAND_NEGATE_NV
-#define GL_EXPAND_NEGATE_NV             0x8539
+#define GL_EXPAND_NEGATE_NV 0x8539
 #endif
 
 #ifndef GL_HALF_BIAS_NORMAL_NV
-#define GL_HALF_BIAS_NORMAL_NV          0x853A
+#define GL_HALF_BIAS_NORMAL_NV 0x853A
 #endif
 
 #ifndef GL_HALF_BIAS_NEGATE_NV
-#define GL_HALF_BIAS_NEGATE_NV          0x853B
+#define GL_HALF_BIAS_NEGATE_NV 0x853B
 #endif
 
 #ifndef GL_SIGNED_IDENTITY_NV
-#define GL_SIGNED_IDENTITY_NV           0x853C
+#define GL_SIGNED_IDENTITY_NV 0x853C
 #endif
 
 #ifndef GL_SIGNED_NEGATE_NV
-#define GL_SIGNED_NEGATE_NV             0x853D
+#define GL_SIGNED_NEGATE_NV 0x853D
 #endif
 
 #ifndef GL_SCALE_BY_TWO_NV
-#define GL_SCALE_BY_TWO_NV              0x853E
+#define GL_SCALE_BY_TWO_NV 0x853E
 #endif
 
 #ifndef GL_SCALE_BY_FOUR_NV
-#define GL_SCALE_BY_FOUR_NV             0x853F
+#define GL_SCALE_BY_FOUR_NV 0x853F
 #endif
 
 #ifndef GL_SCALE_BY_ONE_HALF_NV
-#define GL_SCALE_BY_ONE_HALF_NV         0x8540
+#define GL_SCALE_BY_ONE_HALF_NV 0x8540
 #endif
 
 #ifndef GL_BIAS_BY_NEGATIVE_ONE_HALF_NV
@@ -182,92 +170,112 @@ extern int _errno __attribute__((alias("errno")));
 #endif
 
 #ifndef GL_COMBINER_INPUT_NV
-#define GL_COMBINER_INPUT_NV             0x8542
+#define GL_COMBINER_INPUT_NV 0x8542
 #endif
 
 #ifndef GL_COMBINER_MAPPING_NV
-#define GL_COMBINER_MAPPING_NV           0x8543
+#define GL_COMBINER_MAPPING_NV 0x8543
 #endif
 
 #ifndef GL_COMBINER_COMPONENT_USAGE_NV
-#define GL_COMBINER_COMPONENT_USAGE_NV   0x8544
+#define GL_COMBINER_COMPONENT_USAGE_NV 0x8544
 #endif
 
 #ifndef GL_COMBINER_AB_DOT_PRODUCT_NV
-#define GL_COMBINER_AB_DOT_PRODUCT_NV    0x8545
+#define GL_COMBINER_AB_DOT_PRODUCT_NV 0x8545
 #endif
 
 #ifndef GL_COMBINER_CD_DOT_PRODUCT_NV
-#define GL_COMBINER_CD_DOT_PRODUCT_NV    0x8546
+#define GL_COMBINER_CD_DOT_PRODUCT_NV 0x8546
 #endif
 
 #ifndef GL_COMBINER_MUX_SUM_NV
-#define GL_COMBINER_MUX_SUM_NV           0x8547
+#define GL_COMBINER_MUX_SUM_NV 0x8547
 #endif
 
 #ifndef GL_COMBINER_SCALE_NV
-#define GL_COMBINER_SCALE_NV             0x8548
+#define GL_COMBINER_SCALE_NV 0x8548
 #endif
 
 #ifndef GL_COMBINER_BIAS_NV
-#define GL_COMBINER_BIAS_NV              0x8549
+#define GL_COMBINER_BIAS_NV 0x8549
 #endif
 
 #ifndef GL_COMBINER_AB_OUTPUT_NV
-#define GL_COMBINER_AB_OUTPUT_NV         0x854A
+#define GL_COMBINER_AB_OUTPUT_NV 0x854A
 #endif
 
 #ifndef GL_COMBINER_CD_OUTPUT_NV
-#define GL_COMBINER_CD_OUTPUT_NV         0x854B
+#define GL_COMBINER_CD_OUTPUT_NV 0x854B
 #endif
 
 #ifndef GL_COMBINER_SUM_OUTPUT_NV
-#define GL_COMBINER_SUM_OUTPUT_NV        0x854C
+#define GL_COMBINER_SUM_OUTPUT_NV 0x854C
 #endif
 
 #ifndef GL_MAX_GENERAL_COMBINERS_NV
-#define GL_MAX_GENERAL_COMBINERS_NV      0x854D
+#define GL_MAX_GENERAL_COMBINERS_NV 0x854D
 #endif
 
 #ifndef GL_NUM_GENERAL_COMBINERS_NV
-#define GL_NUM_GENERAL_COMBINERS_NV      0x854E
+#define GL_NUM_GENERAL_COMBINERS_NV 0x854E
 #endif
 
 #ifndef GL_COLOR_SUM_CLAMP_NV
-#define GL_COLOR_SUM_CLAMP_NV            0x854F
+#define GL_COLOR_SUM_CLAMP_NV 0x854F
 #endif
 
 #ifndef GL_COMBINER0_NV
-#define GL_COMBINER0_NV                  0x8550
+#define GL_COMBINER0_NV 0x8550
 #endif
 
 #ifndef GL_COMBINER1_NV
-#define GL_COMBINER1_NV                  0x8551
+#define GL_COMBINER1_NV 0x8551
 #endif
 
 #ifndef GL_COMBINER2_NV
-#define GL_COMBINER2_NV                  0x8552
+#define GL_COMBINER2_NV 0x8552
 #endif
 
 #ifndef GL_COMBINER3_NV
-#define GL_COMBINER3_NV                  0x8553
+#define GL_COMBINER3_NV 0x8553
 #endif
 
 #ifndef GL_COMBINER4_NV
-#define GL_COMBINER4_NV                  0x8554
+#define GL_COMBINER4_NV 0x8554
 #endif
 
 #ifndef GL_COMBINER5_NV
-#define GL_COMBINER5_NV                  0x8555
+#define GL_COMBINER5_NV 0x8555
 #endif
 
 #ifndef GL_COMBINER6_NV
-#define GL_COMBINER6_NV                  0x8556
+#define GL_COMBINER6_NV 0x8556
 #endif
 
 #ifndef GL_COMBINER7_NV
-#define GL_COMBINER7_NV                  0x8557
+#define GL_COMBINER7_NV 0x8557
 #endif
+
+
+/* Set to 1 to enable debug output, 0 to disable it */
+int debug_enabled = 0;
+
+int debug_fprintf(FILE *stream, const char *format, ...)
+{
+    if (!debug_enabled)
+        return 0;
+
+    va_list args;
+    va_start(args, format);
+
+    int result = vfprintf(stream, format, args);
+
+    va_end(args);
+
+    return result;
+}
+
 
 
 /*
@@ -282,12 +290,120 @@ static Display *sdl_display = NULL;
 static Window sdl_x11_window = None;
 
 static int sdl_initialized = 0;
-
 static int creating_sdl = 0;
 
 static int window_width = 640;
 static int window_height = 480;
 
+/*
+ * ============================================================================
+ * Virtual test button
+ * ============================================================================
+ *
+ * 0 = released
+ * 1 = held
+ *
+ * Pressing T sets this to 1.
+ * Releasing T sets this back to 0.
+ *
+ * replacement_readTest() converts this held state into a single
+ * "new press" event, matching the original game's readTest() behaviour.
+ */
+
+static volatile int virtual_test_button = 0;
+
+static volatile int input_thread_running = 0;
+static pthread_t input_thread;
+
+/*
+ * ============================================================================
+ * Game test-button detour
+ * ============================================================================
+ */
+
+
+void detourFunction(size_t address, void *function)
+{
+    int pagesize = sysconf(_SC_PAGE_SIZE);
+
+    void *toModify = (void *)(address - (address % pagesize));
+
+    int prot = mprotect(toModify, pagesize, PROT_EXEC | PROT_WRITE);
+    if (prot != 0)
+    {
+        printf("Error: Cannot detour memory region to change variable (%d)\n", prot);
+        return;
+    }
+
+    uint32_t jumpAddress = (function - (void *)address) - 5;
+
+    // Build the assembly to make the function jump
+    char cave[5] = {0xE9, 0x00, 0x00, 0x00, 0x00};
+    cave[4] = (jumpAddress >> (8 * 3)) & 0xFF;
+    cave[3] = (jumpAddress >> (8 * 2)) & 0xFF;
+    cave[2] = (jumpAddress >> (8 * 1)) & 0xFF;
+    cave[1] = (jumpAddress) & 0xFF;
+
+    memcpy((void *)address, cave, 5);
+}
+
+/*
+ * ============================================================================
+ * Replacement for readTest()
+ * ============================================================================
+ *
+ * Original:
+ *
+ *     int readTest__14G3Dintf_mandos(G3Dintf_mandos *this)
+ *
+ * The original function returns 1 only when the test button transitions
+ * from released to pressed.
+ */
+
+static int replacement_readTest(
+    void *self)
+{
+    (void)self;
+
+    static int previous = 0;
+
+    int current =
+        virtual_test_button != 0;
+
+    int pressed =
+        current && !previous;
+
+    previous =
+        current;
+
+    
+        fprintf(
+            stderr,
+            "[preload] TEST button %d\n", virtual_test_button
+        );
+    
+
+    return pressed;
+}
+
+/*
+ * ============================================================================
+ * Install game controller detour
+ * ============================================================================
+ */
+
+static void install_controller_detours(void)
+{
+    debug_fprintf(
+        stderr,
+        "[preload] installing test-button detour\n"
+    );
+
+    detourFunction(
+        0x080e6c14,
+        (void *)replacement_readTest
+    );
+}
 
 /*
  * ============================================================================
@@ -323,7 +439,6 @@ static real_XOpenDisplay_t real_XOpenDisplay_func = NULL;
 static real_XCreateWindow_t real_XCreateWindow_func = NULL;
 static real_XMapWindow_t real_XMapWindow_func = NULL;
 
-
 /*
  * ============================================================================
  * Resolve real Xlib functions
@@ -333,7 +448,6 @@ static real_XMapWindow_t real_XMapWindow_func = NULL;
 static void resolve_xlib_functions(void)
 {
     if (!real_XOpenDisplay_func) {
-
         real_XOpenDisplay_func =
             (real_XOpenDisplay_t)dlsym(
                 RTLD_NEXT,
@@ -342,7 +456,6 @@ static void resolve_xlib_functions(void)
     }
 
     if (!real_XCreateWindow_func) {
-
         real_XCreateWindow_func =
             (real_XCreateWindow_t)dlsym(
                 RTLD_NEXT,
@@ -351,7 +464,6 @@ static void resolve_xlib_functions(void)
     }
 
     if (!real_XMapWindow_func) {
-
         real_XMapWindow_func =
             (real_XMapWindow_t)dlsym(
                 RTLD_NEXT,
@@ -360,12 +472,12 @@ static void resolve_xlib_functions(void)
     }
 }
 
-
 /*
  * ============================================================================
  * Create SDL window
  * ============================================================================
  */
+static void start_input_thread(void);
 
 static int init_sdl_window(
     int width,
@@ -373,19 +485,15 @@ static int init_sdl_window(
 {
     SDL_SysWMinfo wm;
 
-
     if (sdl_window != NULL) {
         return 1;
     }
-
 
     if (creating_sdl) {
         return 0;
     }
 
-
     creating_sdl = 1;
-
 
     if (width > 0) {
         window_width = width;
@@ -395,14 +503,12 @@ static int init_sdl_window(
         window_height = height;
     }
 
-
-    fprintf(
+    debug_fprintf(
         stderr,
         "[preload] creating SDL window %dx%d\n",
         window_width,
         window_height
     );
-
 
     SDL_setenv(
         "SDL_VIDEODRIVER",
@@ -410,12 +516,11 @@ static int init_sdl_window(
         1
     );
 
-
     if (!sdl_initialized) {
 
         if (SDL_Init(SDL_INIT_VIDEO) != 0) {
 
-            fprintf(
+            debug_fprintf(
                 stderr,
                 "[preload] SDL_Init failed: %s\n",
                 SDL_GetError()
@@ -429,9 +534,8 @@ static int init_sdl_window(
         sdl_initialized = 1;
     }
 
-
     sdl_window = SDL_CreateWindow(
-        "Galeco Tokyo Cop",
+        "Gaelco Loader",
         SDL_WINDOWPOS_CENTERED,
         SDL_WINDOWPOS_CENTERED,
         window_width,
@@ -440,10 +544,9 @@ static int init_sdl_window(
         SDL_WINDOW_OPENGL
     );
 
-
     if (!sdl_window) {
 
-        fprintf(
+        debug_fprintf(
             stderr,
             "[preload] SDL_CreateWindow failed: %s\n",
             SDL_GetError()
@@ -454,7 +557,6 @@ static int init_sdl_window(
         return 0;
     }
 
-
     memset(
         &wm,
         0,
@@ -463,12 +565,11 @@ static int init_sdl_window(
 
     SDL_VERSION(&wm.version);
 
-
     if (!SDL_GetWindowWMInfo(
             sdl_window,
             &wm)) {
 
-        fprintf(
+        debug_fprintf(
             stderr,
             "[preload] SDL_GetWindowWMInfo failed: %s\n",
             SDL_GetError()
@@ -485,10 +586,9 @@ static int init_sdl_window(
         return 0;
     }
 
-
     if (wm.subsystem != SDL_SYSWM_X11) {
 
-        fprintf(
+        debug_fprintf(
             stderr,
             "[preload] SDL window is not using X11 "
             "(subsystem=%d)\n",
@@ -506,32 +606,30 @@ static int init_sdl_window(
         return 0;
     }
 
-
     sdl_display =
         wm.info.x11.display;
 
     sdl_x11_window =
         wm.info.x11.window;
 
-
-    fprintf(
+    debug_fprintf(
         stderr,
         "[preload] SDL X11 display = %p\n",
         (void *)sdl_display
     );
 
-    fprintf(
+    debug_fprintf(
         stderr,
         "[preload] SDL X11 window  = 0x%lx\n",
         (unsigned long)sdl_x11_window
     );
 
-
     creating_sdl = 0;
+
+    start_input_thread();
 
     return 1;
 }
-
 
 /*
  * ============================================================================
@@ -544,17 +642,15 @@ Display *XOpenDisplay(
 {
     resolve_xlib_functions();
 
-
     if (creating_sdl) {
 
         if (real_XOpenDisplay_func) {
-
             return real_XOpenDisplay_func(
                 display_name
             );
         }
 
-        fprintf(
+        debug_fprintf(
             stderr,
             "[preload] real XOpenDisplay unavailable\n"
         );
@@ -562,14 +658,13 @@ Display *XOpenDisplay(
         return NULL;
     }
 
-
     if (!sdl_window) {
 
         if (!init_sdl_window(
                 window_width,
                 window_height)) {
 
-            fprintf(
+            debug_fprintf(
                 stderr,
                 "[preload] unable to initialize SDL window\n"
             );
@@ -578,8 +673,7 @@ Display *XOpenDisplay(
         }
     }
 
-
-    fprintf(
+    debug_fprintf(
         stderr,
         "[preload] XOpenDisplay(\"%s\") -> SDL Display %p\n",
         display_name ?
@@ -588,10 +682,8 @@ Display *XOpenDisplay(
         (void *)sdl_display
     );
 
-
     return sdl_display;
 }
-
 
 /*
  * ============================================================================
@@ -615,11 +707,9 @@ Window XCreateWindow(
 {
     resolve_xlib_functions();
 
-
     if (creating_sdl) {
 
         if (real_XCreateWindow_func) {
-
             return real_XCreateWindow_func(
                 display,
                 parent,
@@ -636,14 +726,13 @@ Window XCreateWindow(
             );
         }
 
-        fprintf(
+        debug_fprintf(
             stderr,
             "[preload] real XCreateWindow unavailable\n"
         );
 
         return None;
     }
-
 
     if (!sdl_window) {
 
@@ -655,12 +744,11 @@ Window XCreateWindow(
             window_height = (int)height;
         }
 
-
         if (!init_sdl_window(
                 window_width,
                 window_height)) {
 
-            fprintf(
+            debug_fprintf(
                 stderr,
                 "[preload] XCreateWindow: "
                 "SDL window creation failed\n"
@@ -670,8 +758,7 @@ Window XCreateWindow(
         }
     }
 
-
-    fprintf(
+    debug_fprintf(
         stderr,
         "[preload] XCreateWindow intercepted:\n"
         "          requested parent = 0x%lx\n"
@@ -697,15 +784,17 @@ Window XCreateWindow(
         (unsigned long)sdl_x11_window
     );
 
-
     if (width > 0 &&
         height > 0) {
 
         if ((int)width != window_width ||
             (int)height != window_height) {
 
-            window_width = (int)width;
-            window_height = (int)height;
+            window_width =
+                (int)width;
+
+            window_height =
+                (int)height;
 
             SDL_SetWindowSize(
                 sdl_window,
@@ -715,10 +804,8 @@ Window XCreateWindow(
         }
     }
 
-
     return sdl_x11_window;
 }
-
 
 /*
  * ============================================================================
@@ -732,11 +819,10 @@ int XMapWindow(
 {
     resolve_xlib_functions();
 
-
     if (sdl_window &&
         window == sdl_x11_window) {
 
-        fprintf(
+        debug_fprintf(
             stderr,
             "[preload] XMapWindow(0x%lx) "
             "-> SDL_ShowWindow()\n",
@@ -750,15 +836,6 @@ int XMapWindow(
         return 0;
     }
 
-
-    /*
-     * Important:
-     *
-     * The previous version returned 0 for every X window. That can break
-     * unrelated X11 windows created by Mesa/GLX or the game.
-     *
-     * Pass unrelated windows to real Xlib.
-     */
     if (real_XMapWindow_func) {
 
         return real_XMapWindow_func(
@@ -767,10 +844,8 @@ int XMapWindow(
         );
     }
 
-
     return 0;
 }
-
 
 /*
  * ============================================================================
@@ -804,10 +879,8 @@ static real_XIfEvent_t real_XIfEvent_func = NULL;
 static real_XPending_t real_XPending_func = NULL;
 static real_XPeekEvent_t real_XPeekEvent_func = NULL;
 
-
 static __thread XIfEventPredicate current_predicate = NULL;
 static __thread XPointer current_predicate_arg = NULL;
-
 
 /*
  * ============================================================================
@@ -818,7 +891,6 @@ static __thread XPointer current_predicate_arg = NULL;
 static void resolve_event_functions(void)
 {
     if (!real_XIfEvent_func) {
-
         real_XIfEvent_func =
             (real_XIfEvent_t)dlsym(
                 RTLD_NEXT,
@@ -826,9 +898,7 @@ static void resolve_event_functions(void)
             );
     }
 
-
     if (!real_XPending_func) {
-
         real_XPending_func =
             (real_XPending_t)dlsym(
                 RTLD_NEXT,
@@ -836,9 +906,7 @@ static void resolve_event_functions(void)
             );
     }
 
-
     if (!real_XPeekEvent_func) {
-
         real_XPeekEvent_func =
             (real_XPeekEvent_t)dlsym(
                 RTLD_NEXT,
@@ -846,7 +914,6 @@ static void resolve_event_functions(void)
             );
     }
 }
-
 
 /*
  * ============================================================================
@@ -960,7 +1027,6 @@ static const char *x_event_name(
     }
 }
 
-
 /*
  * ============================================================================
  * X event logger
@@ -976,8 +1042,7 @@ static void log_xevent(
         return;
     }
 
-
-    fprintf(
+    debug_fprintf(
         stderr,
         "[preload] %s: type=%d (%s) predicate=%s",
         prefix,
@@ -986,12 +1051,11 @@ static void log_xevent(
         predicate_result ? "MATCH" : "no"
     );
 
-
     switch (event->type) {
 
         case MapNotify:
 
-            fprintf(
+            debug_fprintf(
                 stderr,
                 " window=0x%lx event=0x%lx",
                 (unsigned long)event->xmap.window,
@@ -1000,10 +1064,9 @@ static void log_xevent(
 
             break;
 
-
         case UnmapNotify:
 
-            fprintf(
+            debug_fprintf(
                 stderr,
                 " window=0x%lx event=0x%lx",
                 (unsigned long)event->xunmap.window,
@@ -1012,10 +1075,9 @@ static void log_xevent(
 
             break;
 
-
         case ConfigureNotify:
 
-            fprintf(
+            debug_fprintf(
                 stderr,
                 " window=0x%lx event=0x%lx "
                 "x=%d y=%d width=%d height=%d",
@@ -1029,10 +1091,9 @@ static void log_xevent(
 
             break;
 
-
         case Expose:
 
-            fprintf(
+            debug_fprintf(
                 stderr,
                 " window=0x%lx x=%d y=%d width=%d height=%d count=%d",
                 (unsigned long)event->xexpose.window,
@@ -1045,10 +1106,9 @@ static void log_xevent(
 
             break;
 
-
         case PropertyNotify:
 
-            fprintf(
+            debug_fprintf(
                 stderr,
                 " window=0x%lx atom=0x%lx state=%d",
                 (unsigned long)event->xproperty.window,
@@ -1058,10 +1118,9 @@ static void log_xevent(
 
             break;
 
-
         case ClientMessage:
 
-            fprintf(
+            debug_fprintf(
                 stderr,
                 " window=0x%lx message_type=0x%lx",
                 (unsigned long)event->xclient.window,
@@ -1070,11 +1129,10 @@ static void log_xevent(
 
             break;
 
-
         case FocusIn:
         case FocusOut:
 
-            fprintf(
+            debug_fprintf(
                 stderr,
                 " window=0x%lx",
                 (unsigned long)event->xfocus.window
@@ -1082,11 +1140,10 @@ static void log_xevent(
 
             break;
 
-
         case KeyPress:
         case KeyRelease:
 
-            fprintf(
+            debug_fprintf(
                 stderr,
                 " window=0x%lx keycode=%u",
                 (unsigned long)event->xkey.window,
@@ -1095,11 +1152,10 @@ static void log_xevent(
 
             break;
 
-
         case ButtonPress:
         case ButtonRelease:
 
-            fprintf(
+            debug_fprintf(
                 stderr,
                 " window=0x%lx button=%u",
                 (unsigned long)event->xbutton.window,
@@ -1108,18 +1164,15 @@ static void log_xevent(
 
             break;
 
-
         default:
             break;
     }
 
-
-    fprintf(
+    debug_fprintf(
         stderr,
         "\n"
     );
 }
-
 
 /*
  * ============================================================================
@@ -1138,11 +1191,9 @@ static Bool proxy_x_if_event_predicate(
     XPointer predicate_arg =
         current_predicate_arg;
 
-
     if (!predicate) {
         return False;
     }
-
 
     Bool result =
         predicate(
@@ -1151,17 +1202,14 @@ static Bool proxy_x_if_event_predicate(
             predicate_arg
         );
 
-
     log_xevent(
         "XIfEvent examined",
         event,
         result
     );
 
-
     return result;
 }
-
 
 /*
  * ============================================================================
@@ -1177,8 +1225,7 @@ int XIfEvent(
 {
     resolve_event_functions();
 
-
-    fprintf(
+    debug_fprintf(
         stderr,
         "[preload] XIfEvent("
         "display=%p, "
@@ -1191,29 +1238,23 @@ int XIfEvent(
         (void *)arg
     );
 
-
-    /*
-     * Original game's WaitForMapNotify() predicate.
-     */
     if ((uintptr_t)predicate == 0x080cd388 &&
         sdl_window &&
         sdl_x11_window != 0 &&
         (Window)(uintptr_t)arg == sdl_x11_window) {
 
-        fprintf(
+        debug_fprintf(
             stderr,
             "[preload] XIfEvent: "
             "detected WaitForMapNotify()\n"
         );
 
-
-        fprintf(
+        debug_fprintf(
             stderr,
             "[preload] XIfEvent: "
             "synthesizing MapNotify for window 0x%lx\n",
             (unsigned long)sdl_x11_window
         );
-
 
         if (event_return) {
 
@@ -1223,10 +1264,8 @@ int XIfEvent(
                 sizeof(XEvent)
             );
 
-
             event_return->type =
                 MapNotify;
-
 
             event_return->xmap.display =
                 display;
@@ -1241,21 +1280,18 @@ int XIfEvent(
                 False;
         }
 
-
-        fprintf(
+        debug_fprintf(
             stderr,
             "[preload] XIfEvent: "
             "returning synthetic MapNotify\n"
         );
 
-
         return 1;
     }
 
-
     if (!real_XIfEvent_func) {
 
-        fprintf(
+        debug_fprintf(
             stderr,
             "[preload] XIfEvent: "
             "real XIfEvent unavailable\n"
@@ -1264,7 +1300,6 @@ int XIfEvent(
         return 0;
     }
 
-
     if (real_XPending_func) {
 
         int pending =
@@ -1272,14 +1307,12 @@ int XIfEvent(
                 display
             );
 
-
-        fprintf(
+        debug_fprintf(
             stderr,
             "[preload] XIfEvent: "
             "%d event(s) currently pending\n",
             pending
         );
-
 
         if (pending > 0 &&
             real_XPeekEvent_func) {
@@ -1291,7 +1324,6 @@ int XIfEvent(
                 0,
                 sizeof(peeked)
             );
-
 
             if (real_XPeekEvent_func(
                     display,
@@ -1306,20 +1338,17 @@ int XIfEvent(
         }
     }
 
-
     current_predicate =
         predicate;
 
     current_predicate_arg =
         arg;
 
-
-    fprintf(
+    debug_fprintf(
         stderr,
         "[preload] XIfEvent: "
         "entering real XIfEvent with predicate proxy\n"
     );
-
 
     int result =
         real_XIfEvent_func(
@@ -1329,13 +1358,11 @@ int XIfEvent(
             arg
         );
 
-
     current_predicate =
         NULL;
 
     current_predicate_arg =
         NULL;
-
 
     if (event_return) {
 
@@ -1346,32 +1373,23 @@ int XIfEvent(
         );
     }
 
-
-    fprintf(
+    debug_fprintf(
         stderr,
         "[preload] XIfEvent: returned %d\n",
         result
     );
 
-
     return result;
 }
-
 
 /*
  * ============================================================================
  * GL_NV_vertex_array_range compatibility
  * ============================================================================
- *
- * NVIDIA's vertex-array-range extension is primarily a memory-management/
- * performance facility. We don't need an NVIDIA-specific memory pool on
- * modern Mesa.
- * ============================================================================
  */
 
 static const void *nv_vertex_array_pointer = NULL;
 static GLsizei nv_vertex_array_length = 0;
-
 
 void *glXAllocateMemoryNV(
     GLsizei size,
@@ -1383,21 +1401,18 @@ void *glXAllocateMemoryNV(
     (void)writeFrequency;
     (void)priority;
 
-
     if (size <= 0) {
         return NULL;
     }
 
-
     void *ptr = NULL;
-
 
     if (posix_memalign(
             &ptr,
             64,
             (size_t)size) != 0) {
 
-        fprintf(
+        debug_fprintf(
             stderr,
             "[preload] glXAllocateMemoryNV: "
             "posix_memalign failed\n"
@@ -1406,39 +1421,33 @@ void *glXAllocateMemoryNV(
         return NULL;
     }
 
-
     memset(
         ptr,
         0,
         (size_t)size
     );
 
-
-    fprintf(
+    debug_fprintf(
         stderr,
         "[preload] glXAllocateMemoryNV(%d) -> %p\n",
         size,
         ptr
     );
 
-
     return ptr;
 }
-
 
 void glXFreeMemoryNV(
     void *pointer)
 {
-    fprintf(
+    debug_fprintf(
         stderr,
         "[preload] glXFreeMemoryNV(%p)\n",
         pointer
     );
 
-
     free(pointer);
 }
-
 
 void glVertexArrayRangeNV(
     GLsizei length,
@@ -1450,36 +1459,25 @@ void glVertexArrayRangeNV(
     nv_vertex_array_pointer =
         pointer;
 
-
-    fprintf(
+    debug_fprintf(
         stderr,
         "[preload] glVertexArrayRangeNV("
         "length=%d, pointer=%p)\n",
         length,
         pointer
     );
-
-
-    /*
-     * Nothing else is required.
-     *
-     * The game can continue using the ordinary CPU address.
-     */
 }
-
 
 void glFlushVertexArrayRangeNV(
     void)
 {
     __sync_synchronize();
 
-
-    fprintf(
+    debug_fprintf(
         stderr,
         "[preload] glFlushVertexArrayRangeNV()\n"
     );
 }
-
 
 /*
  * ============================================================================
@@ -1495,15 +1493,12 @@ typedef struct
     int signaled;
 } CompatFence;
 
-
 static CompatFence compat_fences[
     MAX_COMPAT_FENCES
 ];
 
-
 static pthread_mutex_t compat_fence_mutex =
     PTHREAD_MUTEX_INITIALIZER;
-
 
 static int compat_fence_valid(
     GLuint id)
@@ -1513,7 +1508,6 @@ static int compat_fence_valid(
         id < MAX_COMPAT_FENCES &&
         compat_fences[id].allocated;
 }
-
 
 void glGenFencesNV(
     GLsizei n,
@@ -1525,18 +1519,15 @@ void glGenFencesNV(
         return;
     }
 
-
     pthread_mutex_lock(
         &compat_fence_mutex
     );
-
 
     for (GLsizei i = 0;
          i < n;
          i++) {
 
         GLuint id = 0;
-
 
         for (GLuint j = 1;
              j < MAX_COMPAT_FENCES;
@@ -1556,24 +1547,20 @@ void glGenFencesNV(
             }
         }
 
-
         fences[i] =
             id;
     }
-
 
     pthread_mutex_unlock(
         &compat_fence_mutex
     );
 
-
-    fprintf(
+    debug_fprintf(
         stderr,
         "[preload] glGenFencesNV(%d)\n",
         n
     );
 }
-
 
 void glDeleteFencesNV(
     GLsizei n,
@@ -1585,11 +1572,9 @@ void glDeleteFencesNV(
         return;
     }
 
-
     pthread_mutex_lock(
         &compat_fence_mutex
     );
-
 
     for (GLsizei i = 0;
          i < n;
@@ -1597,7 +1582,6 @@ void glDeleteFencesNV(
 
         GLuint id =
             fences[i];
-
 
         if (id < MAX_COMPAT_FENCES) {
 
@@ -1609,38 +1593,31 @@ void glDeleteFencesNV(
         }
     }
 
-
     pthread_mutex_unlock(
         &compat_fence_mutex
     );
 }
-
 
 GLboolean glIsFenceNV(
     GLuint fence)
 {
     GLboolean result;
 
-
     pthread_mutex_lock(
         &compat_fence_mutex
     );
-
 
     result =
         compat_fence_valid(fence)
             ? GL_TRUE
             : GL_FALSE;
 
-
     pthread_mutex_unlock(
         &compat_fence_mutex
     );
 
-
     return result;
 }
-
 
 void glSetFenceNV(
     GLuint fence,
@@ -1648,34 +1625,25 @@ void glSetFenceNV(
 {
     (void)condition;
 
-
     pthread_mutex_lock(
         &compat_fence_mutex
     );
-
 
     if (compat_fence_valid(fence)) {
 
         compat_fences[fence].signaled =
             0;
 
-
-        /*
-         * Make the fence conservative.
-         */
         glFlush();
-
 
         compat_fences[fence].signaled =
             1;
     }
 
-
     pthread_mutex_unlock(
         &compat_fence_mutex
     );
 }
-
 
 GLboolean glTestFenceNV(
     GLuint fence)
@@ -1683,11 +1651,9 @@ GLboolean glTestFenceNV(
     GLboolean result =
         GL_FALSE;
 
-
     pthread_mutex_lock(
         &compat_fence_mutex
     );
-
 
     if (compat_fence_valid(fence)) {
 
@@ -1697,15 +1663,12 @@ GLboolean glTestFenceNV(
                 : GL_FALSE;
     }
 
-
     pthread_mutex_unlock(
         &compat_fence_mutex
     );
 
-
     return result;
 }
-
 
 void glFinishFenceNV(
     GLuint fence)
@@ -1713,7 +1676,6 @@ void glFinishFenceNV(
     pthread_mutex_lock(
         &compat_fence_mutex
     );
-
 
     if (compat_fence_valid(fence)) {
 
@@ -1723,12 +1685,10 @@ void glFinishFenceNV(
             1;
     }
 
-
     pthread_mutex_unlock(
         &compat_fence_mutex
     );
 }
-
 
 void glGetFenceivNV(
     GLuint fence,
@@ -1739,14 +1699,11 @@ void glGetFenceivNV(
         return;
     }
 
-
     *params = 0;
-
 
     pthread_mutex_lock(
         &compat_fence_mutex
     );
-
 
     if (compat_fence_valid(fence)) {
 
@@ -1761,14 +1718,12 @@ void glGetFenceivNV(
 
                 break;
 
-
             case GL_FENCE_CONDITION_NV:
 
                 *params =
                     GL_ALL_COMPLETED_NV;
 
                 break;
-
 
             default:
 
@@ -1779,42 +1734,25 @@ void glGetFenceivNV(
         }
     }
 
-
     pthread_mutex_unlock(
         &compat_fence_mutex
     );
 }
 
-
 /*
  * ============================================================================
  * GL_NV_register_combiners compatibility state
  * ============================================================================
- *
- * IMPORTANT:
- *
- * This records the NVIDIA register-combiner state.
- *
- * It does NOT simply discard the calls.
- *
- * The next stage is to translate this state into GLSL. The Khronos extension
- * specification defines the combiner as an actual fragment operation, so
- * making these functions no-ops would result in incorrect colours even though
- * the game would continue running.
- * ============================================================================
  */
 
 #define NV_MAX_GENERAL_COMBINERS 8
-
 
 typedef struct
 {
     GLenum input;
     GLenum mapping;
     GLenum componentUsage;
-
 } NVCombinerInputState;
-
 
 typedef struct
 {
@@ -1833,21 +1771,16 @@ typedef struct
 
 } NVCombinerPortionState;
 
-
 typedef struct
 {
     NVCombinerPortionState rgb;
     NVCombinerPortionState alpha;
-
 } NVCombinerStageState;
-
 
 typedef struct
 {
     NVCombinerInputState input[7];
-
 } NVFinalCombinerState;
-
 
 typedef struct
 {
@@ -1868,21 +1801,16 @@ typedef struct
 
 } NVRegisterCombinerState;
 
-
 static NVRegisterCombinerState nv_rc;
-
 
 static pthread_mutex_t nv_rc_mutex =
     PTHREAD_MUTEX_INITIALIZER;
 
-
 /*
- * Convert:
- *
- *     GL_COMBINER0_NV ... GL_COMBINER7_NV
- *
+ * Convert GL_COMBINER0_NV ... GL_COMBINER7_NV
  * to an array index.
  */
+
 static int nv_rc_stage_index(
     GLenum stage)
 {
@@ -1892,10 +1820,8 @@ static int nv_rc_stage_index(
         return -1;
     }
 
-
     int index =
         (int)(stage - GL_COMBINER0_NV);
-
 
     if (index < 0 ||
         index >= NV_MAX_GENERAL_COMBINERS) {
@@ -1903,14 +1829,13 @@ static int nv_rc_stage_index(
         return -1;
     }
 
-
     return index;
 }
-
 
 /*
  * Convert A/B/C/D variable to array index.
  */
+
 static int nv_rc_variable_index(
     GLenum variable)
 {
@@ -1933,10 +1858,10 @@ static int nv_rc_variable_index(
     }
 }
 
-
 /*
  * Convert final A/B/C/D/E/F/G variable.
  */
+
 static int nv_rc_final_variable_index(
     GLenum variable)
 {
@@ -1968,7 +1893,6 @@ static int nv_rc_final_variable_index(
     }
 }
 
-
 /*
  * ============================================================================
  * glCombinerParameterfvNV
@@ -1983,11 +1907,9 @@ void glCombinerParameterfvNV(
         return;
     }
 
-
     pthread_mutex_lock(
         &nv_rc_mutex
     );
-
 
     switch (pname) {
 
@@ -2001,7 +1923,6 @@ void glCombinerParameterfvNV(
 
             break;
 
-
         case GL_CONSTANT_COLOR1_NV:
 
             memcpy(
@@ -2012,10 +1933,9 @@ void glCombinerParameterfvNV(
 
             break;
 
-
         default:
 
-            fprintf(
+            debug_fprintf(
                 stderr,
                 "[NVRC] glCombinerParameterfvNV "
                 "unhandled pname=0x%x\n",
@@ -2025,13 +1945,11 @@ void glCombinerParameterfvNV(
             break;
     }
 
-
     pthread_mutex_unlock(
         &nv_rc_mutex
     );
 
-
-    fprintf(
+    debug_fprintf(
         stderr,
         "[NVRC] glCombinerParameterfvNV("
         "pname=0x%x, "
@@ -2043,7 +1961,6 @@ void glCombinerParameterfvNV(
         params[3]
     );
 }
-
 
 /*
  * ============================================================================
@@ -2058,7 +1975,6 @@ void glCombinerParameteriNV(
     pthread_mutex_lock(
         &nv_rc_mutex
     );
-
 
     switch (pname) {
 
@@ -2077,7 +1993,6 @@ void glCombinerParameteriNV(
 
             break;
 
-
         case GL_COLOR_SUM_CLAMP_NV:
 
             nv_rc.colorSumClamp =
@@ -2085,10 +2000,9 @@ void glCombinerParameteriNV(
 
             break;
 
-
         default:
 
-            fprintf(
+            debug_fprintf(
                 stderr,
                 "[NVRC] glCombinerParameteriNV "
                 "unhandled pname=0x%x "
@@ -2100,13 +2014,11 @@ void glCombinerParameteriNV(
             break;
     }
 
-
     pthread_mutex_unlock(
         &nv_rc_mutex
     );
 
-
-    fprintf(
+    debug_fprintf(
         stderr,
         "[NVRC] glCombinerParameteriNV("
         "pname=0x%x, "
@@ -2115,7 +2027,6 @@ void glCombinerParameteriNV(
         param
     );
 }
-
 
 /*
  * ============================================================================
@@ -2127,7 +2038,7 @@ void glCombinerParameterfNV(
     GLenum pname,
     GLfloat param)
 {
-    fprintf(
+    debug_fprintf(
         stderr,
         "[NVRC] glCombinerParameterfNV("
         "pname=0x%x, "
@@ -2135,7 +2046,6 @@ void glCombinerParameterfNV(
         pname,
         param
     );
-
 
     if (pname == GL_CONSTANT_COLOR0_NV ||
         pname == GL_CONSTANT_COLOR1_NV) {
@@ -2147,7 +2057,6 @@ void glCombinerParameterfNV(
             param
         };
 
-
         glCombinerParameterfvNV(
             pname,
             values
@@ -2155,7 +2064,6 @@ void glCombinerParameterfNV(
 
         return;
     }
-
 
     if (pname == GL_NUM_GENERAL_COMBINERS_NV ||
         pname == GL_COLOR_SUM_CLAMP_NV) {
@@ -2166,7 +2074,6 @@ void glCombinerParameterfNV(
         );
     }
 }
-
 
 /*
  * ============================================================================
@@ -2185,12 +2092,10 @@ void glCombinerInputNV(
     int stage_index =
         nv_rc_stage_index(stage);
 
-
     int variable_index =
         nv_rc_variable_index(variable);
 
-
-    fprintf(
+    debug_fprintf(
         stderr,
         "[NVRC] glCombinerInputNV("
         "stage=0x%x, "
@@ -2207,11 +2112,10 @@ void glCombinerInputNV(
         componentUsage
     );
 
-
     if (stage_index < 0 ||
         variable_index < 0) {
 
-        fprintf(
+        debug_fprintf(
             stderr,
             "[NVRC] WARNING: invalid "
             "stage/variable\n"
@@ -2220,14 +2124,11 @@ void glCombinerInputNV(
         return;
     }
 
-
     pthread_mutex_lock(
         &nv_rc_mutex
     );
 
-
     NVCombinerPortionState *state;
-
 
     if (portion == GL_RGB) {
 
@@ -2245,7 +2146,7 @@ void glCombinerInputNV(
             &nv_rc_mutex
         );
 
-        fprintf(
+        debug_fprintf(
             stderr,
             "[NVRC] WARNING: unknown "
             "portion=0x%x\n",
@@ -2255,30 +2156,25 @@ void glCombinerInputNV(
         return;
     }
 
-
     state->input[
         variable_index
     ].input =
         input;
-
 
     state->input[
         variable_index
     ].mapping =
         mapping;
 
-
     state->input[
         variable_index
     ].componentUsage =
         componentUsage;
 
-
     pthread_mutex_unlock(
         &nv_rc_mutex
     );
 }
-
 
 /*
  * ============================================================================
@@ -2301,8 +2197,7 @@ void glCombinerOutputNV(
     int stage_index =
         nv_rc_stage_index(stage);
 
-
-    fprintf(
+    debug_fprintf(
         stderr,
         "[NVRC] glCombinerOutputNV("
         "stage=0x%x, "
@@ -2327,10 +2222,9 @@ void glCombinerOutputNV(
         muxSum
     );
 
-
     if (stage_index < 0) {
 
-        fprintf(
+        debug_fprintf(
             stderr,
             "[NVRC] WARNING: invalid stage\n"
         );
@@ -2338,14 +2232,11 @@ void glCombinerOutputNV(
         return;
     }
 
-
     pthread_mutex_lock(
         &nv_rc_mutex
     );
 
-
     NVCombinerPortionState *state;
-
 
     if (portion == GL_RGB) {
 
@@ -2363,7 +2254,7 @@ void glCombinerOutputNV(
             &nv_rc_mutex
         );
 
-        fprintf(
+        debug_fprintf(
             stderr,
             "[NVRC] WARNING: unknown "
             "portion=0x%x\n",
@@ -2372,7 +2263,6 @@ void glCombinerOutputNV(
 
         return;
     }
-
 
     state->abOutput =
         abOutput;
@@ -2398,12 +2288,10 @@ void glCombinerOutputNV(
     state->muxSum =
         muxSum;
 
-
     pthread_mutex_unlock(
         &nv_rc_mutex
     );
 }
-
 
 /*
  * ============================================================================
@@ -2422,8 +2310,7 @@ void glFinalCombinerInputNV(
             variable
         );
 
-
-    fprintf(
+    debug_fprintf(
         stderr,
         "[NVRC] glFinalCombinerInputNV("
         "variable=0x%x, "
@@ -2436,10 +2323,9 @@ void glFinalCombinerInputNV(
         componentUsage
     );
 
-
     if (variable_index < 0) {
 
-        fprintf(
+        debug_fprintf(
             stderr,
             "[NVRC] WARNING: invalid final "
             "combiner variable\n"
@@ -2448,49 +2334,29 @@ void glFinalCombinerInputNV(
         return;
     }
 
-
     pthread_mutex_lock(
         &nv_rc_mutex
     );
-
 
     nv_rc.final.input[
         variable_index
     ].input =
         input;
 
-
     nv_rc.final.input[
         variable_index
     ].mapping =
         mapping;
-
 
     nv_rc.final.input[
         variable_index
     ].componentUsage =
         componentUsage;
 
-
     pthread_mutex_unlock(
         &nv_rc_mutex
     );
 }
-
-
-/*
- * ============================================================================
- * Optional helpers for GL extension queries
- * ============================================================================
- *
- * These aren't part of the five unresolved symbols you listed, but they are
- * useful when the game asks whether register combiners are present.
- *
- * We deliberately DON'T globally claim that Mesa implements the extension.
- * The actual rendering emulation still has to be completed.
- * ============================================================================
- */
-
 
 /*
  * ============================================================================
@@ -2504,8 +2370,7 @@ static void nv_rc_dump_state(void)
         &nv_rc_mutex
     );
 
-
-    fprintf(
+    debug_fprintf(
         stderr,
         "\n"
         "[NVRC] ==================================================\n"
@@ -2524,8 +2389,7 @@ static void nv_rc_dump_state(void)
         nv_rc.constantColor0[3]
     );
 
-
-    fprintf(
+    debug_fprintf(
         stderr,
         "[NVRC] constant1           = "
         "%f %f %f %f\n",
@@ -2535,7 +2399,6 @@ static void nv_rc_dump_state(void)
         nv_rc.constantColor1[3]
     );
 
-
     for (int i = 0;
          i < nv_rc.numGeneralCombiners &&
          i < NV_MAX_GENERAL_COMBINERS;
@@ -2544,15 +2407,13 @@ static void nv_rc_dump_state(void)
         NVCombinerStageState *stage =
             &nv_rc.stage[i];
 
-
-        fprintf(
+        debug_fprintf(
             stderr,
             "[NVRC] COMBINER%d\n",
             i
         );
 
-
-        fprintf(
+        debug_fprintf(
             stderr,
             "[NVRC]   RGB: "
             "AB=0x%x CD=0x%x SUM=0x%x "
@@ -2568,8 +2429,7 @@ static void nv_rc_dump_state(void)
             stage->rgb.muxSum
         );
 
-
-        fprintf(
+        debug_fprintf(
             stderr,
             "[NVRC]   ALPHA: "
             "AB=0x%x CD=0x%x SUM=0x%x "
@@ -2586,22 +2446,160 @@ static void nv_rc_dump_state(void)
         );
     }
 
-
     pthread_mutex_unlock(
         &nv_rc_mutex
     );
 
-
-    fprintf(
+    debug_fprintf(
         stderr,
         "[NVRC] ==================================================\n\n"
     );
 }
 
+/*
+ * ============================================================================
+ * SDL input monitor
+ * ============================================================================
+ *
+ * T key:
+ *
+ *     KEYDOWN -> virtual_test_button = 1
+ *     KEYUP   -> virtual_test_button = 0
+ *
+ * SDL_QUIT deliberately does NOT call exit().
+ * The game is left running.
+ */
+static void *input_thread_main(void *unused)
+{
+    (void)unused;
+
+    fprintf(
+        stderr,
+        "[preload] input monitor started\n"
+    );
+
+    while (input_thread_running) {
+
+        if (!sdl_window) {
+            usleep(10000);
+            continue;
+        }
+
+        SDL_PumpEvents();
+
+        SDL_Event event;
+
+        while (SDL_PeepEvents(
+                   &event,
+                   1,
+                   SDL_GETEVENT,
+                   SDL_FIRSTEVENT,
+                   SDL_LASTEVENT) > 0) {
+
+            if (event.type == SDL_QUIT) {
+
+                debug_fprintf(
+                    stderr,
+                    "[preload] SDL_QUIT received\n"
+                );
+
+                input_thread_running = 0;
+
+                /*
+                 * The user clicked the window close button.
+                 * Terminate the process just as the previous
+                 * implementation intended.
+                 */
+                exit(0);
+            }
+
+            if (event.type == SDL_KEYDOWN &&
+                event.key.keysym.sym == SDLK_t &&
+                !event.key.repeat) {
+
+                virtual_test_button = 1;
+
+                fprintf(
+                    stderr,
+                    "[preload] T -> TEST button held\n"
+                );
+            }
+
+            if (event.type == SDL_KEYUP &&
+                event.key.keysym.sym == SDLK_t) {
+
+                virtual_test_button = 0;
+
+                fprintf(
+                    stderr,
+                    "[preload] T -> TEST button released\n"
+                );
+            }
+        }
+
+        usleep(5000);
+    }
+
+
+    debug_fprintf(
+        stderr,
+        "[preload] input monitor stopped\n"
+    );
+
+    return NULL;
+}
 
 /*
  * ============================================================================
- * Optional initialization
+ * Start input monitor
+ * ============================================================================
+ */
+
+static void start_input_thread(void)
+{
+    if (input_thread_running) {
+        return;
+    }
+
+    if (!sdl_window) {
+        return;
+    }
+
+    input_thread_running = 1;
+
+    if (pthread_create(
+            &input_thread,
+            NULL,
+            input_thread_main,
+            NULL) != 0) {
+
+        input_thread_running = 0;
+
+        debug_fprintf(
+            stderr,
+            "[preload] failed to create input thread\n"
+        );
+
+        return;
+    }
+
+    pthread_detach(
+        input_thread
+    );
+}
+
+static void maybe_start_input_thread(void)
+{
+    if (sdl_window &&
+        sdl_initialized) {
+
+        start_input_thread();
+    }
+}
+
+/*
+ * ============================================================================
+ * Initialization
  * ============================================================================
  */
 
@@ -2614,26 +2612,48 @@ static void preload_init(void)
         sizeof(nv_rc)
     );
 
-
-    /*
-     * NV_register_combiners defaults.
-     *
-     * The specification's default number of active combiners is one.
-     */
     nv_rc.numGeneralCombiners =
         1;
-
 
     nv_rc.colorSumClamp =
         GL_TRUE;
 
-
-    fprintf(
+    debug_fprintf(
         stderr,
         "[preload] NVIDIA compatibility loader initialized\n"
     );
+
+    /*
+     * Install the game's test-button detour immediately.
+     */
+
+    install_controller_detours();
+
+    /*
+     * The input thread is started once the SDL window exists.
+     */
 }
 
+/*
+ * ============================================================================
+ * Hook input-thread startup into window creation
+ * ============================================================================
+ *
+ * We need to start the keyboard monitor after SDL_CreateWindow() has
+ * successfully completed.
+ *
+ * This wrapper is called from the X11 interception paths below.
+ */
+
+static void ensure_input_thread(void)
+{
+    if (sdl_window &&
+        sdl_initialized &&
+        !input_thread_running) {
+
+        start_input_thread();
+    }
+}
 
 /*
  * ============================================================================
@@ -2644,14 +2664,16 @@ static void preload_init(void)
 __attribute__((destructor))
 static void shutdown_sdl(void)
 {
-    fprintf(
+    debug_fprintf(
         stderr,
         "[preload] shutting down\n"
     );
 
+    input_thread_running = 0;
+
+    virtual_test_button = 0;
 
     nv_rc_dump_state();
-
 
     if (sdl_window) {
 
@@ -2661,7 +2683,6 @@ static void shutdown_sdl(void)
 
         sdl_window = NULL;
     }
-
 
     if (sdl_initialized) {
 
