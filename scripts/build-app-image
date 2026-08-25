@@ -3,45 +3,58 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BUILD_DIR="${SCRIPT_DIR}/build"
-APPDIR="${SCRIPT_DIR}/Gaelco.AppDir"
-OUTPUT="${SCRIPT_DIR}/Gaelco.AppImage"
+PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+BUILD_DIR="${PROJECT_DIR}/build"
+
+APPDIR="${PROJECT_DIR}/Gaelco.AppDir"
+OUTPUT="${PROJECT_DIR}/GaelcoLoader.AppImage"
 
 LINUXDEPLOY="${SCRIPT_DIR}/linuxdeploy-x86_64"
 
 # ----------------------------------------------------------------------
+
 # Download linuxdeploy
+
 # ----------------------------------------------------------------------
 
 if [ ! -f "${LINUXDEPLOY}" ]; then
-    echo "==> Downloading linuxdeploy..."
+echo "==> Downloading linuxdeploy..."
 
-    wget -O "${LINUXDEPLOY}" \
-        https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+```
+wget -O "${LINUXDEPLOY}" \
+    https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
 
-    chmod +x "${LINUXDEPLOY}"
+chmod +x "${LINUXDEPLOY}"
+```
+
 fi
 
 # ----------------------------------------------------------------------
+
 # Check application
+
 # ----------------------------------------------------------------------
 
 if [ ! -f "${BUILD_DIR}/gaelco" ]; then
-    echo "ERROR: ${BUILD_DIR}/gaelco not found"
-    exit 1
+echo "ERROR: ${BUILD_DIR}/gaelco not found"
+echo "Run: cmake --build ${BUILD_DIR}"
+exit 1
 fi
 
-if [ ! -f "${BUILD_DIR}/gaelco.so" ]; then
-    echo "ERROR: ${BUILD_DIR}/gaelco.so not found"
-    exit 1
+if [ ! -f "${BUILD_DIR}/gaelco-preload.so" ]; then
+echo "ERROR: ${BUILD_DIR}/gaelco-preload.so not found"
+echo "Run: cmake --build ${BUILD_DIR}"
+exit 1
 fi
 
 echo "==> Application architecture:"
 file "${BUILD_DIR}/gaelco"
-file "${BUILD_DIR}/gaelco.so"
+file "${BUILD_DIR}/gaelco-preload.so"
 
 # ----------------------------------------------------------------------
+
 # Create AppDir
+
 # ----------------------------------------------------------------------
 
 echo "==> Creating AppDir"
@@ -49,34 +62,175 @@ echo "==> Creating AppDir"
 rm -rf "${APPDIR}"
 
 mkdir -p "${APPDIR}/usr/bin"
+mkdir -p "${APPDIR}/usr/share/icons/hicolor/scalable/apps"
 
-cp "${BUILD_DIR}/gaelco" \
-   "${APPDIR}/usr/bin/gaelco"
+# ----------------------------------------------------------------------
 
-cp "${BUILD_DIR}/gaelco.so" \
-   "${APPDIR}/usr/bin/gaelco.so"
+# Copy application
+
+# ----------------------------------------------------------------------
+
+cp "${BUILD_DIR}/gaelco" "${APPDIR}/usr/bin/gaelco"
+cp "${BUILD_DIR}/gaelco-preload.so" "${APPDIR}/usr/bin/gaelco-preload.so"
 
 chmod +x "${APPDIR}/usr/bin/gaelco"
 
 # ----------------------------------------------------------------------
-# Create AppRun
+
+# Create icon
+
 # ----------------------------------------------------------------------
+
+ICON="${APPDIR}/usr/share/icons/hicolor/scalable/apps/gaelco.svg"
+
+echo "==> Creating icon"
+
+cat > "${ICON}" <<'EOF'
+
+<?xml version="1.0" encoding="UTF-8"?>
+
+<svg xmlns="http://www.w3.org/2000/svg"
+  width="256"
+  height="256"
+  viewBox="0 0 256 256">
+
+<rect width="256"
+     height="256"
+     rx="32"
+     fill="#111111"/>
+
+<rect x="24"
+     y="24"
+     width="208"
+     height="208"
+     rx="24"
+     fill="#222222"
+     stroke="#555555"
+     stroke-width="4"/>
+
+  <!-- Arcade cabinet -->
+
+<path d="M65 55
+        L191 55
+        L205 200
+        L51 200
+        Z"
+     fill="#333333"
+     stroke="#dddddd"
+     stroke-width="5"
+     stroke-linejoin="round"/>
+
+  <!-- Screen -->
+
+<path d="M78 73
+        L178 73
+        L183 130
+        L73 130
+        Z"
+     fill="#050505"
+     stroke="#999999"
+     stroke-width="4"/>
+
+<path d="M88 85
+        L168 85
+        L171 118
+        L85 118
+        Z"
+     fill="#00aaff"/>
+
+  <!-- Control panel -->
+
+<path d="M69 140
+        L187 140
+        L194 158
+        L62 158
+        Z"
+     fill="#444444"
+     stroke="#dddddd"
+     stroke-width="4"/>
+
+  <!-- Joystick -->
+
+<line x1="108"
+     y1="148"
+     x2="108"
+     y2="130"
+     stroke="#eeeeee"
+     stroke-width="6"
+     stroke-linecap="round"/>
+
+<circle cx="108"
+       cy="126"
+       r="8"
+       fill="#ff3333"/>
+
+  <!-- Buttons -->
+
+<circle cx="137"
+       cy="148"
+       r="7"
+       fill="#ff3333"/>
+
+<circle cx="157"
+       cy="148"
+       r="7"
+       fill="#ffaa00"/>
+
+  <!-- Coin slot -->
+
+<rect x="116"
+     y="174"
+     width="24"
+     height="13"
+     rx="3"
+     fill="#111111"
+     stroke="#aaaaaa"
+     stroke-width="3"/>
+
+<text x="128"
+     y="218"
+     text-anchor="middle"
+     font-family="sans-serif"
+     font-size="20"
+     font-weight="bold"
+     fill="#ffffff">
+GAELCO </text>
+
+</svg>
+EOF
+
+# ----------------------------------------------------------------------
+
+# Create AppRun
+
+# ----------------------------------------------------------------------
+
+echo "==> Creating AppRun"
 
 cat > "${APPDIR}/AppRun" <<'EOF'
 #!/usr/bin/env bash
 
+set -e
+
 HERE="$(dirname "$(readlink -f "$0")")"
+BIN="${HERE}/usr/bin"
+PRELOAD="${BIN}/gaelco-preload.so"
 
-export LD_LIBRARY_PATH="${HERE}/usr/lib/i386-linux-gnu:${HERE}/usr/lib:${HERE}/usr/bin:${LD_LIBRARY_PATH:-}"
+export LD_LIBRARY_PATH="${BIN}:${HERE}/usr/lib/i386-linux-gnu:${HERE}/usr/lib:${LD_LIBRARY_PATH:-}"
+export LD_PRELOAD="${PRELOAD}${LD_PRELOAD:+:${LD_PRELOAD}}"
 
-exec "${HERE}/usr/bin/gaelco" "$@"
+exec "${BIN}/gaelco" "$@"
 EOF
 
 chmod +x "${APPDIR}/AppRun"
 
 # ----------------------------------------------------------------------
+
 # Desktop file
+
 # ----------------------------------------------------------------------
+
+echo "==> Creating desktop file"
 
 cat > "${APPDIR}/gaelco.desktop" <<'EOF'
 [Desktop Entry]
@@ -84,50 +238,64 @@ Type=Application
 Name=Gaelco
 Comment=Gaelco Loader
 Exec=gaelco
+Icon=gaelco
 Terminal=true
 Categories=Game;
 EOF
 
 # ----------------------------------------------------------------------
+
 # Run linuxdeploy
-#
-# The application and library are both explicitly supplied so linuxdeploy
-# knows about the two ELF objects that make up the application.
+
 # ----------------------------------------------------------------------
 
 echo "==> Running linuxdeploy..."
 
-ARCH=i386 \
-    "${LINUXDEPLOY}" \
-    --appdir "${APPDIR}" \
-    --executable "${APPDIR}/usr/bin/gaelco" \
-    --library "${APPDIR}/usr/bin/gaelco.so" \
-    --desktop-file "${APPDIR}/gaelco.desktop"
+"${LINUXDEPLOY}" --appdir="${APPDIR}" --executable="${APPDIR}/usr/bin/gaelco" --desktop-file="${APPDIR}/gaelco.desktop" --icon-file="${ICON}"
 
 # ----------------------------------------------------------------------
+
 # Build AppImage
+
 # ----------------------------------------------------------------------
 
 echo "==> Building AppImage..."
 
 rm -f "${OUTPUT}"
 
-ARCH=i386 \
-    "${LINUXDEPLOY}" \
-    --appdir "${APPDIR}" \
-    --output appimage
+ARCH=i386 "${LINUXDEPLOY}" --appdir="${APPDIR}" --output=appimage
 
-# linuxdeploy normally names it after the application.
-GENERATED="$(find "${SCRIPT_DIR}" -maxdepth 1 -name '*.AppImage' -type f \
-    ! -name "$(basename "${OUTPUT}")" | head -n 1 || true)"
+# ----------------------------------------------------------------------
 
-if [ -n "${GENERATED}" ]; then
-    mv "${GENERATED}" "${OUTPUT}"
-fi
+# Rename generated AppImage
+
+# ----------------------------------------------------------------------
+
+echo "==> Renaming AppImage..."
+
+mv ${PROJECT_DIR}/*.AppImage "${OUTPUT}"
+
+# ----------------------------------------------------------------------
+
+# Remove AppDir
+
+# ----------------------------------------------------------------------
+
+echo "==> Removing AppDir..."
+
+rm -rf "${APPDIR}"
+
+# ----------------------------------------------------------------------
+
+# Done
+
+# ----------------------------------------------------------------------
 
 echo
 echo "=========================================="
 echo " AppImage created:"
 echo
 echo " ${OUTPUT}"
+echo
+echo " AppDir removed."
 echo "=========================================="

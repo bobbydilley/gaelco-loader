@@ -2,6 +2,8 @@
 *.d
 
 build/
+GaelcoLoader.AppImage
+scripts/linuxdeploy-x86_64
 
 # Object files
 *.o
