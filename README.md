@@ -7,3 +7,12 @@ A loader for Gaelco Linux Games
 - Tokyo Cop
 - Ring Riders
 - Tuning Race
+
+## Building
+
+```
+mkdir biuld
+cd build
+cmake ..
+make
+```
