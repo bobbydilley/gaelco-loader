@@ -15,10 +15,6 @@ int errno = 0;
 
 extern int _errno __attribute__((alias("errno")));
 
-// CRCs for the games so it's easy to know what to load
-#define TOKYO_COP 0x100
-#define CHAMPIONSHIP_TUNING_RACE 0x6f1e5179
-#define RING_RIDERS 0x300
 
 static void initDetours(void)
 {
@@ -49,30 +45,13 @@ __attribute__((constructor)) static void initPreload(void)
             (int)getpid(),
             getGameCRC32());
 
-    switch (getGameCRC32())
-    {
-    case TOKYO_COP:
-        fprintf(stderr, "[preload] Detected Tokyo Cop\n");
-        break;
-    case CHAMPIONSHIP_TUNING_RACE:
-        fprintf(stderr, "[preload] Detected Championship Tuning Race\n");
-        break;
-    case RING_RIDERS:
-        fprintf(stderr, "[preload] Detected Ring Riders\n");
-        break;
-    default:
-        break;
-    }
-
-
     initDetours();
-
 }
 
 
 __attribute__((destructor)) static void destroyPreload(void)
 {
-    log(
+    debug(
         "[preload] shutting down\n");
 
     controls_stop_input_thread();

@@ -48,7 +48,7 @@ int graphics_init_window(int width, int height)
         window_height = height;
     }
 
-    log("[graphics] creating SDL window %dx%d\n",
+    debug("[graphics] creating SDL window %dx%d\n",
         window_width,
         window_height);
 
@@ -58,7 +58,7 @@ int graphics_init_window(int width, int height)
     {
         if (SDL_Init(SDL_INIT_VIDEO) != 0)
         {
-            log("[graphics] SDL_Init failed: %s\n",
+            debug("[graphics] SDL_Init failed: %s\n",
                 SDL_GetError());
             creating_sdl = 0;
             return 0;
@@ -68,7 +68,7 @@ int graphics_init_window(int width, int height)
     }
 
     sdl_window = SDL_CreateWindow(
-        "Gaelco Loader",
+        getGameName(),
         SDL_WINDOWPOS_CENTERED,
         SDL_WINDOWPOS_CENTERED,
         window_width,
@@ -77,7 +77,7 @@ int graphics_init_window(int width, int height)
 
     if (!sdl_window)
     {
-        log("[graphics] SDL_CreateWindow failed: %s\n",
+        debug("[graphics] SDL_CreateWindow failed: %s\n",
             SDL_GetError());
         creating_sdl = 0;
         return 0;
@@ -88,7 +88,7 @@ int graphics_init_window(int width, int height)
 
     if (!SDL_GetWindowWMInfo(sdl_window, &wm))
     {
-        log("[graphics] SDL_GetWindowWMInfo failed: %s\n",
+        debug("[graphics] SDL_GetWindowWMInfo failed: %s\n",
             SDL_GetError());
         SDL_DestroyWindow(sdl_window);
         sdl_window = NULL;
@@ -98,7 +98,7 @@ int graphics_init_window(int width, int height)
 
     if (wm.subsystem != SDL_SYSWM_X11)
     {
-        log("[graphics] SDL window is not using X11 (subsystem=%d)\n",
+        debug("[graphics] SDL window is not using X11 (subsystem=%d)\n",
             wm.subsystem);
         SDL_DestroyWindow(sdl_window);
         sdl_window = NULL;
@@ -109,9 +109,9 @@ int graphics_init_window(int width, int height)
     sdl_display = wm.info.x11.display;
     sdl_x11_window = wm.info.x11.window;
 
-    log("[graphics] SDL X11 display = %p\n",
+    debug("[graphics] SDL X11 display = %p\n",
         (void *)sdl_display);
-    log("[graphics] SDL X11 window  = 0x%lx\n",
+    debug("[graphics] SDL X11 window  = 0x%lx\n",
         (unsigned long)sdl_x11_window);
 
     creating_sdl = 0;
@@ -195,7 +195,7 @@ Display *XOpenDisplay(const char *display_name)
             return real_XOpenDisplay(display_name);
         }
 
-        log("[graphics] real XOpenDisplay unavailable\n");
+        debug("[graphics] real XOpenDisplay unavailable\n");
         return NULL;
     }
 
@@ -203,14 +203,14 @@ Display *XOpenDisplay(const char *display_name)
     {
         if (!graphics_init_window(window_width, window_height))
         {
-            log("[graphics] unable to initialize SDL window\n");
+            debug("[graphics] unable to initialize SDL window\n");
             return NULL;
         }
 
         controls_start_input_thread();
     }
 
-    log("[graphics] XOpenDisplay(\"%s\") -> SDL Display %p\n",
+    debug("[graphics] XOpenDisplay(\"%s\") -> SDL Display %p\n",
         display_name ? display_name : "(null)",
         (void *)sdl_display);
 
@@ -233,7 +233,7 @@ Window XCreateWindow(Display *display, Window parent, int x, int y, unsigned int
             return real_XCreateWindow(display, parent, x, y, width, height, border_width, depth, class, visual, valueMask, attributes);
         }
 
-        log("[graphics] real XCreateWindow unavailable\n");
+        debug("[graphics] real XCreateWindow unavailable\n");
         return None;
     }
 
@@ -251,14 +251,14 @@ Window XCreateWindow(Display *display, Window parent, int x, int y, unsigned int
 
         if (!graphics_init_window(window_width, window_height))
         {
-            log("[graphics] XCreateWindow: SDL window creation failed\n");
+            debug("[graphics] XCreateWindow: SDL window creation failed\n");
             return None;
         }
 
         controls_start_input_thread();
     }
 
-    log("[graphics] XCreateWindow intercepted:\n"
+    debug("[graphics] XCreateWindow intercepted:\n"
         "          requested parent = 0x%lx\n"
         "          requested x      = %d\n"
         "          requested y      = %d\n"
@@ -302,7 +302,7 @@ int XMapWindow(Display *display, Window window)
 
     if (graphics_is_sdl_window(window))
     {
-        log("[graphics] XMapWindow(0x%lx) -> SDL_ShowWindow()\n",
+        debug("[graphics] XMapWindow(0x%lx) -> SDL_ShowWindow()\n",
             (unsigned long)window);
         graphics_show_window();
         return 0;
@@ -323,16 +323,16 @@ int XIfEvent(Display *display, XEvent *event_return, XIfEventPredicate predicate
         real_XIfEvent_func = (real_XIfEvent_t)dlsym(RTLD_NEXT, "XIfEvent");
     }
 
-    log("[graphics] XIfEvent(display=%p, event_return=%p, predicate=%p, arg=%p)\n",
+    debug("[graphics] XIfEvent(display=%p, event_return=%p, predicate=%p, arg=%p)\n",
         (void *)display,
         (void *)event_return,
         (void *)predicate,
         (void *)arg);
 
-    if ((uintptr_t)predicate == 0x080cd388 && graphics_is_sdl_window((Window)(uintptr_t)arg))
+    if (((uintptr_t)predicate == 0x080cd388 || (uintptr_t)predicate == 0x80d7190) && graphics_is_sdl_window((Window)(uintptr_t)arg))
     {
-        log("[graphics] XIfEvent: detected WaitForMapNotify()\n");
-        log("[graphics] XIfEvent: synthesizing MapNotify for window 0x%lx\n",
+        debug("[graphics] XIfEvent: detected WaitForMapNotify()\n");
+        debug("[graphics] XIfEvent: synthesizing MapNotify for window 0x%lx\n",
             (unsigned long)sdl_x11_window);
 
         if (event_return)
@@ -345,19 +345,19 @@ int XIfEvent(Display *display, XEvent *event_return, XIfEventPredicate predicate
             event_return->xmap.override_redirect = False;
         }
 
-        log("[graphics] XIfEvent: returning synthetic MapNotify\n");
+        debug("[graphics] XIfEvent: returning synthetic MapNotify\n");
         return 1;
     }
 
     if (!real_XIfEvent_func)
     {
-        log("[graphics] XIfEvent: real XIfEvent unavailable\n");
+        debug("[graphics] XIfEvent: real XIfEvent unavailable\n");
         return 0;
     }
 
     {
         int pending = XPending(display);
-        log("[graphics] XIfEvent: %d event(s) currently pending\n", pending);
+        debug("[graphics] XIfEvent: %d event(s) currently pending\n", pending);
 
         if (pending > 0)
         {
@@ -372,14 +372,14 @@ int XIfEvent(Display *display, XEvent *event_return, XIfEventPredicate predicate
     current_predicate = predicate;
     current_predicate_arg = arg;
 
-    log("[graphics] XIfEvent: entering real XIfEvent with predicate proxy\n");
+    debug("[graphics] XIfEvent: entering real XIfEvent with predicate proxy\n");
 
     int result = real_XIfEvent_func(display, event_return, proxy_x_if_event_predicate, arg);
 
     current_predicate = NULL;
     current_predicate_arg = NULL;
 
-    log("[graphics] XIfEvent: returned %d\n", result);
+    debug("[graphics] XIfEvent: returned %d\n", result);
     return result;
 }
 

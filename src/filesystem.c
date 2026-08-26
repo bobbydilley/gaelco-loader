@@ -11,14 +11,24 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 
+#include "utils.h"
+
 static const char *redirect_path(const char *pathname)
 {
     static char result[PATH_MAX];
 
+    // printf("redirect_path: %s\n", pathname);
+
     const char *prefix =
         "/home/joc2001/joc2001/salidas/";
 
-    if (strncmp(pathname, prefix, strlen(prefix)) != 0)
+    const char *prefix2 =
+        "/home/joc2001/joc2004/salidas/";
+
+    const char *prefix3 =
+        "/home/joc2001/joc2003/salidas/";
+
+    if (strncmp(pathname, prefix, strlen(prefix)) != 0 && strncmp(pathname, prefix2, strlen(prefix2)) != 0  && strncmp(pathname, prefix3, strlen(prefix3)) != 0)
         return pathname;
 
     char exe_path[PATH_MAX];
@@ -26,8 +36,7 @@ static const char *redirect_path(const char *pathname)
     ssize_t len = readlink(
         "/proc/self/exe",
         exe_path,
-        sizeof(exe_path) - 1
-    );
+        sizeof(exe_path) - 1);
 
     if (len < 0)
         return pathname;
@@ -43,17 +52,38 @@ static const char *redirect_path(const char *pathname)
 
     const char *filename = pathname + strlen(prefix);
 
-    snprintf(
-        result,
-        sizeof(result),
-        "%s/../../../salidas/%s",
-        exe_path,
-        filename
-    );
+    switch (getGameCRC32())
+    {
+    case TOKYO_COP:
+        snprintf(
+            result,
+            sizeof(result),
+            "%s/../../../salidas/%s",
+            exe_path,
+            filename);
+        break;
+    case CHAMPIONSHIP_TUNING_RACE:
+        snprintf(
+            result,
+            sizeof(result),
+            "%s/%s",
+            exe_path,
+            filename);
+        break;
+    case RING_RIDERS:
+        snprintf(
+            result,
+            sizeof(result),
+            "%s/../../../salidas/%s",
+            exe_path,
+            filename);
+        break;
+    default:
+        return pathname;
+    }
 
     return result;
 }
-
 
 /*
  * open()
@@ -82,7 +112,6 @@ int open(const char *pathname, int flags, ...)
     return real_open(new_path, flags);
 }
 
-
 /*
  * open64()
  */
@@ -110,7 +139,6 @@ int open64(const char *pathname, int flags, ...)
     return real_open64(new_path, flags);
 }
 
-
 /*
  * openat()
  */
@@ -137,7 +165,6 @@ int openat(int dirfd, const char *pathname, int flags, ...)
 
     return real_openat(dirfd, new_path, flags);
 }
-
 
 /*
  * openat64()
@@ -175,10 +202,8 @@ FILE *fopen(const char *pathname, const char *mode)
 
     const char *new_path = redirect_path(pathname);
 
-
     return real_fopen(new_path, mode);
 }
-
 
 FILE *fopen64(const char *pathname, const char *mode)
 {

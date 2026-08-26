@@ -13,9 +13,26 @@ static int debugEnabled = 1;
 static uint32_t crc32Table[256];
 static uint32_t gameCRC32 = 0;
 
+char *getGameName()
+{
+    switch (getGameCRC32())
+    {
+    case TOKYO_COP:
+        return "Tokyo Cop";
+    case CHAMPIONSHIP_TUNING_RACE:
+        return "Championship Tuning Race";
+    case RING_RIDERS:
+        return "Ring Riders";
+    default:
+        return "Unknown Game";
+    }
+
+    return "Unknown Game";
+}
+
 uint32_t getGameCRC32(void)
 {
-    if(gameCRC32 != 0)
+    if (gameCRC32 != 0)
         return gameCRC32;
 
     for (uint32_t i = 0; i < 256; i++)
@@ -67,8 +84,7 @@ uint32_t getGameCRC32(void)
     return gameCRC32;
 }
 
-
-void log(const char *format, ...)
+void debug(const char *format, ...)
 {
     if (!debugEnabled)
         return;
