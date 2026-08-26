@@ -30,6 +30,15 @@ separate_arguments(SDL2_LIBS_LIST UNIX_COMMAND "${SDL2_LIBS}")
 # gaelco-preload.so
 #
 
+
+find_path(XF86VM_INCLUDE_DIR
+    X11/extensions/xf86vmode.h
+)
+
+if(NOT XF86VM_INCLUDE_DIR)
+    message(FATAL_ERROR "XFree86-VidMode headers not found")
+endif()
+
 add_library(gaelco-preload SHARED
     src/preload.c
     src/controls.c
@@ -37,6 +46,10 @@ add_library(gaelco-preload SHARED
     src/graphics.c
     src/sound.c
     src/filesystem.c
+)
+
+target_include_directories(gaelco-preload PRIVATE
+    ${XF86VM_INCLUDE_DIR}
 )
 
 target_compile_options(gaelco-preload PRIVATE
@@ -51,11 +64,10 @@ target_link_options(gaelco-preload PRIVATE
     -Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/preload.map
 )
 
-# SDL2's sdl2-config returns "-lSDL2".
-# Extract the libraries and pass them through CMake's linker interface.
 target_link_libraries(gaelco-preload PRIVATE
     ${SDL2_LIBS_LIST}
     X11
+    Xxf86vm
     dl
 )
 
