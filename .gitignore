@@ -1,6 +1,8 @@
 # Prerequisites
 *.d
 
+.DS_Store
+
 build/
 GaelcoLoader.AppImage
 scripts/linuxdeploy-x86_64

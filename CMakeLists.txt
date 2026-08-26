@@ -46,6 +46,7 @@ add_library(gaelco-preload SHARED
     src/graphics.c
     src/sound.c
     src/filesystem.c
+    src/utils.c
 )
 
 target_include_directories(gaelco-preload PRIVATE

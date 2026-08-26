@@ -11,46 +11,6 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 
-/*
- * Function pointers to the real libc functions.
- */
-static int (*real_open)(const char *, int, ...) = NULL;
-static int (*real_open64)(const char *, int, ...) = NULL;
-static int (*real_openat)(int, const char *, int, ...) = NULL;
-static int (*real_openat64)(int, const char *, int, ...) = NULL;
-
-
-/*
- * Resolve all of the real functions.
- */
-static void init_real_functions(void)
-{
-    if (!real_open)
-        real_open = dlsym(RTLD_NEXT, "open");
-
-    if (!real_open64)
-        real_open64 = dlsym(RTLD_NEXT, "open64");
-
-    if (!real_openat)
-        real_openat = dlsym(RTLD_NEXT, "openat");
-
-    if (!real_openat64)
-        real_openat64 = dlsym(RTLD_NEXT, "openat64");
-}
-
-
-/*
- * Rewrite:
- *
- *   /home/joc2001/joc2001/salidas/foo
- *
- * to:
- *
- *   <exe directory>/../../../salidas/foo
- *
- * Returns pathname unchanged if it isn't one of the files
- * we want to redirect.
- */
 static const char *redirect_path(const char *pathname)
 {
     static char result[PATH_MAX];
@@ -73,7 +33,6 @@ static const char *redirect_path(const char *pathname)
         return pathname;
 
     exe_path[len] = '\0';
-
 
     char *slash = strrchr(exe_path, '/');
 
@@ -101,10 +60,12 @@ static const char *redirect_path(const char *pathname)
  */
 int open(const char *pathname, int flags, ...)
 {
-    init_real_functions();
+    static int (*real_open)(const char *, int, ...) = NULL;
+
+    if (!real_open)
+        real_open = dlsym(RTLD_NEXT, "open");
 
     const char *new_path = redirect_path(pathname);
-
 
     if (flags & O_CREAT)
     {
@@ -127,10 +88,12 @@ int open(const char *pathname, int flags, ...)
  */
 int open64(const char *pathname, int flags, ...)
 {
-    init_real_functions();
+    static int (*real_open64)(const char *, int, ...) = NULL;
+
+    if (!real_open64)
+        real_open64 = dlsym(RTLD_NEXT, "open64");
 
     const char *new_path = redirect_path(pathname);
-
 
     if (flags & O_CREAT)
     {
@@ -153,10 +116,12 @@ int open64(const char *pathname, int flags, ...)
  */
 int openat(int dirfd, const char *pathname, int flags, ...)
 {
-    init_real_functions();
+    static int (*real_openat)(int, const char *, int, ...) = NULL;
+
+    if (!real_openat)
+        real_openat = dlsym(RTLD_NEXT, "openat");
 
     const char *new_path = redirect_path(pathname);
-
 
     if (flags & O_CREAT)
     {
@@ -179,10 +144,12 @@ int openat(int dirfd, const char *pathname, int flags, ...)
  */
 int openat64(int dirfd, const char *pathname, int flags, ...)
 {
-    init_real_functions();
+    static int (*real_openat64)(int, const char *, int, ...) = NULL;
+
+    if (!real_openat64)
+        real_openat64 = dlsym(RTLD_NEXT, "openat64");
 
     const char *new_path = redirect_path(pathname);
-
 
     if (flags & O_CREAT)
     {

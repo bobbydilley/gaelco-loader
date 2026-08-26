@@ -1,0 +1,15 @@
+#ifndef CONTROLS_H
+#define CONTROLS_H
+
+#include <SDL2/SDL.h>
+
+extern volatile int virtual_test_button;
+extern volatile int input_thread_running;
+
+int controls_read_test_button(void *self);
+void controls_handle_event(const SDL_Event *event);
+void controls_start_input_thread(void);
+void controls_stop_input_thread(void);
+void controls_reset_input_state(void);
+
+#endif
