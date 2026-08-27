@@ -10,7 +10,17 @@
 volatile int virtual_test_button = 0;
 volatile int virtual_coin1 = 0;
 volatile int virtual_start1 = 0;
+volatile int virtual_service = 0;
+volatile int virtual_estop = 0;
+volatile int virtual_steer_left = 0;
+volatile int virtual_steer_right = 0;
+volatile int virtual_accel = 0;
+volatile int virtual_brake = 0;
 volatile int input_thread_running = 0;
+
+/* Neutral/idle byte for the wheel pot (port 0x44) and full-deflection step. */
+#define WHEEL_CENTER 0x80
+#define WHEEL_DEFLECT 0x60
 
 static pthread_t input_thread;
 
@@ -39,16 +49,47 @@ int controls_read_test_button(void *self)
  *
  * UpdateControllers() polls this every frame for ports 0x40-0x47 and feeds
  * the decoded bits into the game's Flancos()/Nivel() input state, which
- * MainLoop and every menu read from. Confirmed via static analysis:
- *   - MainLoop:    Flancos(2, 0x800)  gates entering TEST mode
- *   - ControlCoins: Flancos(2, 0x200) adds a credit (COIN1)
- *   - many menus:  Flancos(2, 0x2000) is confirm/START
+ * MainLoop and every menu read from, plus two analog pot channels used
+ * directly (not through Flancos/Nivel) for the wheel and pedals.
  *
- * TEST and COIN1 turn out to come from a keyboard-scancode-style byte on
- * port 0x42 (0x10 = coin, 0x14 = test, debounced over a few frames by the
- * game itself), not a dedicated switch bit - this looks like a built-in
- * manufacturer debug/service input path. START is a real hardware bit:
- * port 0x40 bit 5, active-low.
+ * Findings from static analysis of the port-decode logic:
+ *
+ *   Port 0x40 (digital, active-low unless noted):
+ *     bit5 (0x20) -> Flancos(2,0x2000)  START / menu confirm
+ *     bit6 (0x40) -> Nivel(2,0x4000), ACTIVE-HIGH. This is the motion
+ *                    platform "safety circuit OK" line: MainLoop's Ramas
+ *                    state machine only shows the flashing "pull the
+ *                    emergency stop" reminder (pintaRotuloBotonSeguridad)
+ *                    while this bit reads 0. We default it HIGH (armed),
+ *                    so the game should already sail past that screen;
+ *                    virtual_estop lets you flip it low to test that path.
+ *
+ *   Port 0x41 (digital, active-low):
+ *     bit2 (0x04) -> Flancos(0,0x10), used as a SERVICE/select button in
+ *                    some test sub-screens (e.g. SoundTest).
+ *
+ *   Port 0x42 (keyboard-scancode-style byte, debounced by the game itself
+ *   over a few consecutive polls): 0x10 = COIN1, 0x14 = TEST. Neither has
+ *   a dedicated switch bit - this looks like a built-in manufacturer
+ *   debug/service input path layered on top of the raw switches.
+ *
+ *   Ports 0x44/0x45/0x46 (raw 0-255 analog, fed straight into the POTE
+ *   calibration struct, not through Flancos/Nivel):
+ *     0x44 -> wheel  (INVERTED: game stores 0xFF - raw; center ~0x80)
+ *     0x45 -> accelerator pedal (raw, uninverted)
+ *     0x46 -> brake pedal (raw, uninverted)
+ *   ControlesMenu (the main test-menu cursor handler) reads the wheel's
+ *   calibrated output directly: steering hard left/right moves the cursor
+ *   up/down the options list, and flooring the accelerator confirms a
+ *   selection (in addition to START). So there is no separate switch for
+ *   test-menu navigation - it reuses the wheel and pedal already wired
+ *   for driving, matching how the real cabinet's control panel is laid
+ *   out (no joystick).
+ *
+ * Left/right steering polarity and the exact idle level for the pedals
+ * are our best guess from the byte layout, not something we could verify
+ * without running the game - flip WHEEL_DEFLECT's sign (or swap the
+ * left/right branches below) if steering comes out backwards.
  */
 int controls_read_port(void *self, int port, char *value)
 {
@@ -63,6 +104,18 @@ int controls_read_port(void *self, int port, char *value)
         if (virtual_start1)
         {
             v &= (unsigned char)~0x20; /* bit5 = START, active-low */
+        }
+        if (virtual_estop)
+        {
+            v &= (unsigned char)~0x40; /* bit6 = safety circuit, active-HIGH: clear to simulate E-STOP pressed */
+        }
+        break;
+
+    case 0x41:
+        v = 0xFF;
+        if (virtual_service)
+        {
+            v &= (unsigned char)~0x04; /* bit2 = SERVICE, active-low */
         }
         break;
 
@@ -79,6 +132,26 @@ int controls_read_port(void *self, int port, char *value)
         {
             v = 0x00;
         }
+        break;
+
+    case 0x44:
+        v = WHEEL_CENTER;
+        if (virtual_steer_left)
+        {
+            v = WHEEL_CENTER - WHEEL_DEFLECT;
+        }
+        else if (virtual_steer_right)
+        {
+            v = WHEEL_CENTER + WHEEL_DEFLECT;
+        }
+        break;
+
+    case 0x45:
+        v = virtual_accel ? 0xFF : 0x00;
+        break;
+
+    case 0x46:
+        v = virtual_brake ? 0xFF : 0x00;
         break;
 
     default:
@@ -187,6 +260,78 @@ void controls_handle_event(const SDL_Event *event)
         virtual_start1 = 0;
         fprintf(stderr, "[controls] 1 -> START released\n");
     }
+
+    if (event->type == SDL_KEYDOWN &&
+        event->key.keysym.sym == SDLK_9 &&
+        !event->key.repeat)
+    {
+        virtual_service = 1;
+        fprintf(stderr, "[controls] 9 -> SERVICE held\n");
+    }
+
+    if (event->type == SDL_KEYUP &&
+        event->key.keysym.sym == SDLK_9)
+    {
+        virtual_service = 0;
+        fprintf(stderr, "[controls] 9 -> SERVICE released\n");
+    }
+
+    if (event->type == SDL_KEYDOWN &&
+        event->key.keysym.sym == SDLK_e &&
+        !event->key.repeat)
+    {
+        virtual_estop ^= 1;
+        fprintf(stderr, "[controls] E -> motion E-STOP %s\n",
+                virtual_estop ? "PRESSED (platform disabled)" : "released (platform armed)");
+    }
+
+    if (event->type == SDL_KEYDOWN &&
+        event->key.keysym.sym == SDLK_LEFT)
+    {
+        virtual_steer_left = 1;
+    }
+
+    if (event->type == SDL_KEYUP &&
+        event->key.keysym.sym == SDLK_LEFT)
+    {
+        virtual_steer_left = 0;
+    }
+
+    if (event->type == SDL_KEYDOWN &&
+        event->key.keysym.sym == SDLK_RIGHT)
+    {
+        virtual_steer_right = 1;
+    }
+
+    if (event->type == SDL_KEYUP &&
+        event->key.keysym.sym == SDLK_RIGHT)
+    {
+        virtual_steer_right = 0;
+    }
+
+    if (event->type == SDL_KEYDOWN &&
+        event->key.keysym.sym == SDLK_UP)
+    {
+        virtual_accel = 1;
+    }
+
+    if (event->type == SDL_KEYUP &&
+        event->key.keysym.sym == SDLK_UP)
+    {
+        virtual_accel = 0;
+    }
+
+    if (event->type == SDL_KEYDOWN &&
+        event->key.keysym.sym == SDLK_DOWN)
+    {
+        virtual_brake = 1;
+    }
+
+    if (event->type == SDL_KEYUP &&
+        event->key.keysym.sym == SDLK_DOWN)
+    {
+        virtual_brake = 0;
+    }
 }
 
 void controls_start_input_thread(void)
@@ -223,4 +368,10 @@ void controls_reset_input_state(void)
     virtual_test_button = 0;
     virtual_coin1 = 0;
     virtual_start1 = 0;
+    virtual_service = 0;
+    virtual_estop = 0;
+    virtual_steer_left = 0;
+    virtual_steer_right = 0;
+    virtual_accel = 0;
+    virtual_brake = 0;
 }

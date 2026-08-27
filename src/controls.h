@@ -6,6 +6,12 @@
 extern volatile int virtual_test_button;
 extern volatile int virtual_coin1;
 extern volatile int virtual_start1;
+extern volatile int virtual_service;
+extern volatile int virtual_estop;
+extern volatile int virtual_steer_left;
+extern volatile int virtual_steer_right;
+extern volatile int virtual_accel;
+extern volatile int virtual_brake;
 extern volatile int input_thread_running;
 
 int controls_read_test_button(void *self);
