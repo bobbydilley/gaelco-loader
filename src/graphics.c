@@ -621,6 +621,160 @@ void glTexImage2D(unsigned int target, int level, int internalformat, int width,
 }
 
 /*
+ * The persistent GL_INVALID_ENUM is proven NOT to come from glEnable/
+ * glDisable (every occurrence is "BEFORE forwarding", i.e. already
+ * pending - "AFTER forwarding" has never fired once). It has to be some
+ * other enum-taking call we haven't instrumented yet - texture
+ * environment/generation and material/light state are all called
+ * per-object and none of them have been checked so far. Bracket all of
+ * them at once instead of guessing one at a time.
+ */
+typedef void (*glTexEnvi_diag_t)(unsigned int target, unsigned int pname, int param);
+typedef void (*glTexEnvf_diag_t)(unsigned int target, unsigned int pname, float param);
+typedef void (*glTexGenf_diag_t)(unsigned int coord, unsigned int pname, float param);
+typedef void (*glHint_diag_t)(unsigned int target, unsigned int mode);
+typedef void (*glLightModeli_diag_t)(unsigned int pname, int param);
+typedef void (*glFogi_diag_t)(unsigned int pname, int param);
+typedef void (*glCullFace_diag_t)(unsigned int mode);
+typedef void (*glFrontFace_diag_t)(unsigned int mode);
+typedef void (*glDepthFunc_diag_t)(unsigned int func);
+typedef void (*glBlendFunc_diag_t)(unsigned int sfactor, unsigned int dfactor);
+typedef void (*glShadeModel_diag_t)(unsigned int mode);
+typedef void (*glActiveTextureARB_diag_t)(unsigned int texture);
+typedef void (*glClientActiveTextureARB_diag_t)(unsigned int texture);
+
+static glTexEnvi_diag_t real_glTexEnvi_diag = NULL;
+static glTexEnvf_diag_t real_glTexEnvf_diag = NULL;
+static glTexGenf_diag_t real_glTexGenf_diag = NULL;
+static glHint_diag_t real_glHint_diag = NULL;
+static glLightModeli_diag_t real_glLightModeli_diag = NULL;
+static glFogi_diag_t real_glFogi_diag = NULL;
+static glCullFace_diag_t real_glCullFace_diag = NULL;
+static glFrontFace_diag_t real_glFrontFace_diag = NULL;
+static glDepthFunc_diag_t real_glDepthFunc_diag = NULL;
+static glBlendFunc_diag_t real_glBlendFunc_diag = NULL;
+static glShadeModel_diag_t real_glShadeModel_diag = NULL;
+static glActiveTextureARB_diag_t real_glActiveTextureARB_diag = NULL;
+static glClientActiveTextureARB_diag_t real_glClientActiveTextureARB_diag = NULL;
+
+void glTexEnvi(unsigned int target, unsigned int pname, int param)
+{
+    if (!real_glTexEnvi_diag) real_glTexEnvi_diag = (glTexEnvi_diag_t)dlsym(RTLD_NEXT, "glTexEnvi");
+    if (real_glTexEnvi_diag) real_glTexEnvi_diag(target, pname, param);
+    char tag[80];
+    snprintf(tag, sizeof(tag), "glTexEnvi(target=0x%04x, pname=0x%04x, param=0x%04x)", target, pname, (unsigned int)param);
+    log_gl_errors(tag);
+}
+
+void glTexEnvf(unsigned int target, unsigned int pname, float param)
+{
+    if (!real_glTexEnvf_diag) real_glTexEnvf_diag = (glTexEnvf_diag_t)dlsym(RTLD_NEXT, "glTexEnvf");
+    if (real_glTexEnvf_diag) real_glTexEnvf_diag(target, pname, param);
+    char tag[80];
+    snprintf(tag, sizeof(tag), "glTexEnvf(target=0x%04x, pname=0x%04x, param=%.3f)", target, pname, param);
+    log_gl_errors(tag);
+}
+
+void glTexGenf(unsigned int coord, unsigned int pname, float param)
+{
+    if (!real_glTexGenf_diag) real_glTexGenf_diag = (glTexGenf_diag_t)dlsym(RTLD_NEXT, "glTexGenf");
+    if (real_glTexGenf_diag) real_glTexGenf_diag(coord, pname, param);
+    char tag[80];
+    snprintf(tag, sizeof(tag), "glTexGenf(coord=0x%04x, pname=0x%04x, param=%.3f)", coord, pname, param);
+    log_gl_errors(tag);
+}
+
+void glHint(unsigned int target, unsigned int mode)
+{
+    if (!real_glHint_diag) real_glHint_diag = (glHint_diag_t)dlsym(RTLD_NEXT, "glHint");
+    if (real_glHint_diag) real_glHint_diag(target, mode);
+    char tag[80];
+    snprintf(tag, sizeof(tag), "glHint(target=0x%04x, mode=0x%04x)", target, mode);
+    log_gl_errors(tag);
+}
+
+void glLightModeli(unsigned int pname, int param)
+{
+    if (!real_glLightModeli_diag) real_glLightModeli_diag = (glLightModeli_diag_t)dlsym(RTLD_NEXT, "glLightModeli");
+    if (real_glLightModeli_diag) real_glLightModeli_diag(pname, param);
+    char tag[80];
+    snprintf(tag, sizeof(tag), "glLightModeli(pname=0x%04x, param=0x%04x)", pname, (unsigned int)param);
+    log_gl_errors(tag);
+}
+
+void glFogi(unsigned int pname, int param)
+{
+    if (!real_glFogi_diag) real_glFogi_diag = (glFogi_diag_t)dlsym(RTLD_NEXT, "glFogi");
+    if (real_glFogi_diag) real_glFogi_diag(pname, param);
+    char tag[80];
+    snprintf(tag, sizeof(tag), "glFogi(pname=0x%04x, param=0x%04x)", pname, (unsigned int)param);
+    log_gl_errors(tag);
+}
+
+void glCullFace(unsigned int mode)
+{
+    if (!real_glCullFace_diag) real_glCullFace_diag = (glCullFace_diag_t)dlsym(RTLD_NEXT, "glCullFace");
+    if (real_glCullFace_diag) real_glCullFace_diag(mode);
+    char tag[80];
+    snprintf(tag, sizeof(tag), "glCullFace(mode=0x%04x)", mode);
+    log_gl_errors(tag);
+}
+
+void glFrontFace(unsigned int mode)
+{
+    if (!real_glFrontFace_diag) real_glFrontFace_diag = (glFrontFace_diag_t)dlsym(RTLD_NEXT, "glFrontFace");
+    if (real_glFrontFace_diag) real_glFrontFace_diag(mode);
+    char tag[80];
+    snprintf(tag, sizeof(tag), "glFrontFace(mode=0x%04x)", mode);
+    log_gl_errors(tag);
+}
+
+void glDepthFunc(unsigned int func)
+{
+    if (!real_glDepthFunc_diag) real_glDepthFunc_diag = (glDepthFunc_diag_t)dlsym(RTLD_NEXT, "glDepthFunc");
+    if (real_glDepthFunc_diag) real_glDepthFunc_diag(func);
+    char tag[80];
+    snprintf(tag, sizeof(tag), "glDepthFunc(func=0x%04x)", func);
+    log_gl_errors(tag);
+}
+
+void glBlendFunc(unsigned int sfactor, unsigned int dfactor)
+{
+    if (!real_glBlendFunc_diag) real_glBlendFunc_diag = (glBlendFunc_diag_t)dlsym(RTLD_NEXT, "glBlendFunc");
+    if (real_glBlendFunc_diag) real_glBlendFunc_diag(sfactor, dfactor);
+    char tag[80];
+    snprintf(tag, sizeof(tag), "glBlendFunc(sfactor=0x%04x, dfactor=0x%04x)", sfactor, dfactor);
+    log_gl_errors(tag);
+}
+
+void glShadeModel(unsigned int mode)
+{
+    if (!real_glShadeModel_diag) real_glShadeModel_diag = (glShadeModel_diag_t)dlsym(RTLD_NEXT, "glShadeModel");
+    if (real_glShadeModel_diag) real_glShadeModel_diag(mode);
+    char tag[80];
+    snprintf(tag, sizeof(tag), "glShadeModel(mode=0x%04x)", mode);
+    log_gl_errors(tag);
+}
+
+void glActiveTextureARB(unsigned int texture)
+{
+    if (!real_glActiveTextureARB_diag) real_glActiveTextureARB_diag = (glActiveTextureARB_diag_t)dlsym(RTLD_NEXT, "glActiveTextureARB");
+    if (real_glActiveTextureARB_diag) real_glActiveTextureARB_diag(texture);
+    char tag[80];
+    snprintf(tag, sizeof(tag), "glActiveTextureARB(texture=0x%04x)", texture);
+    log_gl_errors(tag);
+}
+
+void glClientActiveTextureARB(unsigned int texture)
+{
+    if (!real_glClientActiveTextureARB_diag) real_glClientActiveTextureARB_diag = (glClientActiveTextureARB_diag_t)dlsym(RTLD_NEXT, "glClientActiveTextureARB");
+    if (real_glClientActiveTextureARB_diag) real_glClientActiveTextureARB_diag(texture);
+    char tag[80];
+    snprintf(tag, sizeof(tag), "glClientActiveTextureARB(texture=0x%04x)", texture);
+    log_gl_errors(tag);
+}
+
+/*
  * GL_NV_register_combiners is a fixed-function multitexture/lighting
  * pipeline that predates shaders - NVIDIA-only, never adopted by Mesa.
  * Reimplementing its exact per-stage math is out of scope, so these are
