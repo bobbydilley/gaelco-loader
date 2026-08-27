@@ -439,23 +439,148 @@ int _XF86VidModeGetGammaRamp(
 
 /*
  * GL_NV_register_combiners is a fixed-function multitexture/lighting
- * pipeline that predates shaders - NVIDIA-only, never adopted by Mesa.
- * Reimplementing its exact per-stage math (which specific combiner
- * programs this game sets up isn't something we can recover generically)
- * is out of scope, so these are deliberately inert: the state they'd
- * configure is simply dropped. The game still issues plenty of ordinary
- * texture/material/lighting calls (glBindTexture, glTexEnv, glLightfv,
- * etc.) around these, so geometry still gets textured and lit through the
- * standard fixed-function pipeline - it just won't get whatever extra
- * per-pixel blending the combiners would have added on NVIDIA hardware.
- * The important part is that these calls no longer crash the process on
- * Mesa, which is what turns "half-rendered / flat-shaded" into "correct
- * enough to play."
+ * pipeline that predates shaders - NVIDIA-only, never adopted by Mesa
+ * (GL_REGISTER_COMBINERS_NV isn't even a token Mesa recognizes, so the
+ * game's glEnable() for it is silently rejected there). Reimplementing
+ * its exact per-stage math in general is out of scope, so
+ * glCombinerInputNV/OutputNV/glFinalCombinerInputNV are deliberately
+ * inert below. But GL_CONSTANT_COLOR0_NV/GL_CONSTANT_COLOR1_NV turned out
+ * to matter: disassembly shows the game recomputing and re-uploading them
+ * per-object from real material/lighting data (not just a one-time
+ * startup default), and every combiner program we decoded multiplies the
+ * final texture*vertex-color result by one of these registers before
+ * writing the fragment. Dropping that multiply entirely is our best
+ * explanation for lost coloring (e.g. tinted text rendering white).
+ *
+ * We approximate it with a small trick standard OpenGL 1.x + ARB_multitexture
+ * (which Mesa fully supports) can do natively: keep a 1x1 texture on a
+ * spare texture unit the game itself never touches, update its color
+ * every time the game sets GL_CONSTANT_COLOR{0,1}_NV, and leave that unit
+ * enabled in the default GL_MODULATE environment. Because texture units
+ * multiply together by default, the game's own unit(s) 0/(1) still do
+ * texture*vertex-color exactly as before, and our extra unit multiplies
+ * the constant color on top - reproducing the combiner's overall effect
+ * without needing to emulate its internal stage graph. This is a best
+ * effort we can't verify without running the game.
  */
+#define GAELCO_CONST_COLOR0_UNIT 0x84C3 /* GL_TEXTURE3_ARB - unused by the game */
+#define GAELCO_CONST_COLOR1_UNIT 0x84C4 /* GL_TEXTURE4_ARB - unused by the game */
+
+typedef void (*glActiveTextureARB_t)(unsigned int texture);
+typedef void (*glBindTexture_t)(unsigned int target, unsigned int texture);
+typedef void (*glGenTextures_t)(int n, unsigned int *textures);
+typedef void (*glTexParameteri_t)(unsigned int target, unsigned int pname, int param);
+typedef void (*glTexImage2D_t)(unsigned int target, int level, int internalformat, int width, int height, int border, unsigned int format, unsigned int type, const void *pixels);
+typedef void (*glTexEnvi_t)(unsigned int target, unsigned int pname, int param);
+typedef void (*glEnable_t)(unsigned int cap);
+typedef void (*glGetIntegerv_t)(unsigned int pname, int *params);
+
+static glActiveTextureARB_t real_glActiveTextureARB = NULL;
+static glBindTexture_t real_glBindTexture = NULL;
+static glGenTextures_t real_glGenTextures = NULL;
+static glTexParameteri_t real_glTexParameteri = NULL;
+static glTexImage2D_t real_glTexImage2D = NULL;
+static glTexEnvi_t real_glTexEnvi = NULL;
+static glEnable_t real_glEnable = NULL;
+static glGetIntegerv_t real_glGetIntegerv = NULL;
+
+static unsigned int const_color_tex[2] = {0, 0};
+static unsigned char const_color_last[2][4] = {{0, 0, 0, 0}, {0, 0, 0, 0}};
+static int const_color_has_last[2] = {0, 0};
+
+static void resolve_real_gl(void)
+{
+    if (real_glActiveTextureARB)
+    {
+        return;
+    }
+
+    real_glActiveTextureARB = (glActiveTextureARB_t)dlsym(RTLD_NEXT, "glActiveTextureARB");
+    real_glBindTexture = (glBindTexture_t)dlsym(RTLD_NEXT, "glBindTexture");
+    real_glGenTextures = (glGenTextures_t)dlsym(RTLD_NEXT, "glGenTextures");
+    real_glTexParameteri = (glTexParameteri_t)dlsym(RTLD_NEXT, "glTexParameteri");
+    real_glTexImage2D = (glTexImage2D_t)dlsym(RTLD_NEXT, "glTexImage2D");
+    real_glTexEnvi = (glTexEnvi_t)dlsym(RTLD_NEXT, "glTexEnvi");
+    real_glEnable = (glEnable_t)dlsym(RTLD_NEXT, "glEnable");
+    real_glGetIntegerv = (glGetIntegerv_t)dlsym(RTLD_NEXT, "glGetIntegerv");
+}
+
+static void apply_constant_color(int slot, unsigned int texture_unit, const float *params)
+{
+    if (!real_glActiveTextureARB || !real_glBindTexture || !real_glGenTextures ||
+        !real_glTexParameteri || !real_glTexImage2D || !real_glTexEnvi ||
+        !real_glEnable || !real_glGetIntegerv)
+    {
+        return;
+    }
+
+    unsigned char rgba[4];
+
+    for (int i = 0; i < 4; i++)
+    {
+        float v = params[i];
+
+        if (v < 0.0f)
+        {
+            v = 0.0f;
+        }
+        else if (v > 1.0f)
+        {
+            v = 1.0f;
+        }
+
+        rgba[i] = (unsigned char)(v * 255.0f + 0.5f);
+    }
+
+    if (const_color_has_last[slot] && memcmp(rgba, const_color_last[slot], sizeof(rgba)) == 0)
+    {
+        return;
+    }
+
+    memcpy(const_color_last[slot], rgba, sizeof(rgba));
+    const_color_has_last[slot] = 1;
+
+    int previous_active = 0;
+    real_glGetIntegerv(0x84E0 /* GL_ACTIVE_TEXTURE_ARB */, &previous_active);
+
+    real_glActiveTextureARB(texture_unit);
+
+    if (const_color_tex[slot] == 0)
+    {
+        real_glGenTextures(1, &const_color_tex[slot]);
+        real_glBindTexture(0x0DE1 /* GL_TEXTURE_2D */, const_color_tex[slot]);
+        real_glTexParameteri(0x0DE1, 0x2801 /* GL_TEXTURE_MIN_FILTER */, 0x2600 /* GL_NEAREST */);
+        real_glTexParameteri(0x0DE1, 0x2800 /* GL_TEXTURE_MAG_FILTER */, 0x2600 /* GL_NEAREST */);
+        real_glTexEnvi(0x2300 /* GL_TEXTURE_ENV */, 0x2200 /* GL_TEXTURE_ENV_MODE */, 0x2100 /* GL_MODULATE */);
+        real_glEnable(0x0DE1);
+    }
+    else
+    {
+        real_glBindTexture(0x0DE1, const_color_tex[slot]);
+    }
+
+    real_glTexImage2D(0x0DE1, 0, 0x1908 /* GL_RGBA */, 1, 1, 0, 0x1908 /* GL_RGBA */, 0x1401 /* GL_UNSIGNED_BYTE */, rgba);
+
+    real_glActiveTextureARB((unsigned int)previous_active);
+}
+
 void glCombinerParameterfvNV(unsigned int pname, const float *params)
 {
-    (void)pname;
-    (void)params;
+    if (!params)
+    {
+        return;
+    }
+
+    resolve_real_gl();
+
+    if (pname == 0x852A /* GL_CONSTANT_COLOR0_NV */)
+    {
+        apply_constant_color(0, GAELCO_CONST_COLOR0_UNIT, params);
+    }
+    else if (pname == 0x852B /* GL_CONSTANT_COLOR1_NV */)
+    {
+        apply_constant_color(1, GAELCO_CONST_COLOR1_UNIT, params);
+    }
 }
 
 void glCombinerParameteriNV(unsigned int pname, int param)
