@@ -7,6 +7,8 @@ extern volatile int virtual_test_button;
 extern volatile int virtual_coin1;
 extern volatile int virtual_start1;
 extern volatile int virtual_service;
+extern volatile int virtual_menu_up;
+extern volatile int virtual_menu_down;
 extern volatile int virtual_estop;
 extern volatile int virtual_steer_left;
 extern volatile int virtual_steer_right;

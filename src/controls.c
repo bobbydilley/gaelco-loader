@@ -11,7 +11,14 @@ volatile int virtual_test_button = 0;
 volatile int virtual_coin1 = 0;
 volatile int virtual_start1 = 0;
 volatile int virtual_service = 0;
-volatile int virtual_estop = 0;
+volatile int virtual_menu_up = 0;
+volatile int virtual_menu_down = 0;
+/*
+ * Starts PRESSED (motion platform disabled), matching the real cabinet:
+ * the physical E-STOP is pushed in by default and the operator has to
+ * pull it out before the platform arms. Toggle with E.
+ */
+volatile int virtual_estop = 1;
 volatile int virtual_steer_left = 0;
 volatile int virtual_steer_right = 0;
 volatile int virtual_accel = 0;
@@ -55,18 +62,31 @@ int controls_read_test_button(void *self)
  * Findings from static analysis of the port-decode logic:
  *
  *   Port 0x40 (digital, active-low unless noted):
- *     bit5 (0x20) -> Flancos(2,0x2000)  START / menu confirm
+ *     bit5 (0x20) -> Flancos(2,0x2000)  START / menu confirm. ClaxonCar
+ *                    (the horn) also fires off Nivel(2,0x2000) - same
+ *                    physical switch as START, so holding START sounds
+ *                    the horn during gameplay. No separate horn input
+ *                    exists in the port decode.
  *     bit6 (0x40) -> Nivel(2,0x4000), ACTIVE-HIGH. This is the motion
  *                    platform "safety circuit OK" line: MainLoop's Ramas
  *                    state machine only shows the flashing "pull the
  *                    emergency stop" reminder (pintaRotuloBotonSeguridad)
- *                    while this bit reads 0. We default it HIGH (armed),
- *                    so the game should already sail past that screen;
- *                    virtual_estop lets you flip it low to test that path.
+ *                    while this bit reads 0. virtual_estop starts at 1
+ *                    (button pressed in / platform disabled) so the game
+ *                    boots into that state like the real cabinet; press
+ *                    E to pull it out and arm the platform.
  *
- *   Port 0x41 (digital, active-low):
- *     bit2 (0x04) -> Flancos(0,0x10), used as a SERVICE/select button in
- *                    some test sub-screens (e.g. SoundTest).
+ *   Port 0x41 (digital, active-low) - this is the operator service panel,
+ *   read directly (not through the analog wheel/pedal path):
+ *     bit0 (0x01) -> Flancos(0,0x40) = MENU UP.   Confirmed via
+ *     bit1 (0x02) -> Flancos(0,0x20) = MENU DOWN. testGetUserEntry(),
+ *                    which is what test_main_menu actually polls to move
+ *                    the cursor and what CtrRepeticion/PonCamara reuse
+ *                    elsewhere - this is the real test-menu navigation
+ *                    input, not the wheel.
+ *     bit2 (0x04) -> Flancos(0,0x10) = SERVICE/select, used in some test
+ *                    sub-screens (e.g. SoundTest's "activate current
+ *                    option").
  *
  *   Port 0x42 (keyboard-scancode-style byte, debounced by the game itself
  *   over a few consecutive polls): 0x10 = COIN1, 0x14 = TEST. Neither has
@@ -78,18 +98,13 @@ int controls_read_test_button(void *self)
  *     0x44 -> wheel  (INVERTED: game stores 0xFF - raw; center ~0x80)
  *     0x45 -> accelerator pedal (raw, uninverted)
  *     0x46 -> brake pedal (raw, uninverted)
- *   ControlesMenu (the main test-menu cursor handler) reads the wheel's
- *   calibrated output directly: steering hard left/right moves the cursor
- *   up/down the options list, and flooring the accelerator confirms a
- *   selection (in addition to START). So there is no separate switch for
- *   test-menu navigation - it reuses the wheel and pedal already wired
- *   for driving, matching how the real cabinet's control panel is laid
- *   out (no joystick).
+ *   ControlesMenu also derives digital up/down/confirm flags from the
+ *   wheel/pedal, but that turned out to gate a different screen, not the
+ *   test menu - the service-panel bits above are what actually matter
+ *   for test-menu navigation.
  *
- * Left/right steering polarity and the exact idle level for the pedals
- * are our best guess from the byte layout, not something we could verify
- * without running the game - flip WHEEL_DEFLECT's sign (or swap the
- * left/right branches below) if steering comes out backwards.
+ * The exact idle level for the pedals is our best guess from the byte
+ * layout, not something we could verify without running the game.
  */
 int controls_read_port(void *self, int port, char *value)
 {
@@ -113,6 +128,14 @@ int controls_read_port(void *self, int port, char *value)
 
     case 0x41:
         v = 0xFF;
+        if (virtual_menu_up)
+        {
+            v &= (unsigned char)~0x01; /* bit0 = MENU UP, active-low */
+        }
+        if (virtual_menu_down)
+        {
+            v &= (unsigned char)~0x02; /* bit1 = MENU DOWN, active-low */
+        }
         if (virtual_service)
         {
             v &= (unsigned char)~0x04; /* bit2 = SERVICE, active-low */
@@ -135,14 +158,16 @@ int controls_read_port(void *self, int port, char *value)
         break;
 
     case 0x44:
+        /* Port 0x44 is stored inverted (0xFF - raw) by the game, so we
+         * invert our steering sense here too - this was backwards before. */
         v = WHEEL_CENTER;
         if (virtual_steer_left)
         {
-            v = WHEEL_CENTER - WHEEL_DEFLECT;
+            v = WHEEL_CENTER + WHEEL_DEFLECT;
         }
         else if (virtual_steer_right)
         {
-            v = WHEEL_CENTER + WHEEL_DEFLECT;
+            v = WHEEL_CENTER - WHEEL_DEFLECT;
         }
         break;
 
@@ -276,6 +301,56 @@ void controls_handle_event(const SDL_Event *event)
         fprintf(stderr, "[controls] 9 -> SERVICE released\n");
     }
 
+    /*
+     * Horn (ClaxonCar) fires off the same physical bit as START - there is
+     * no separate horn switch in the port decode - so H is just an alias
+     * for virtual_start1, kept separate from the "1" key for clarity.
+     */
+    if (event->type == SDL_KEYDOWN &&
+        event->key.keysym.sym == SDLK_h &&
+        !event->key.repeat)
+    {
+        virtual_start1 = 1;
+        fprintf(stderr, "[controls] H -> HORN held (same switch as START)\n");
+    }
+
+    if (event->type == SDL_KEYUP &&
+        event->key.keysym.sym == SDLK_h)
+    {
+        virtual_start1 = 0;
+        fprintf(stderr, "[controls] H -> HORN released\n");
+    }
+
+    if (event->type == SDL_KEYDOWN &&
+        event->key.keysym.sym == SDLK_PAGEUP &&
+        !event->key.repeat)
+    {
+        virtual_menu_up = 1;
+        fprintf(stderr, "[controls] PageUp -> MENU UP held\n");
+    }
+
+    if (event->type == SDL_KEYUP &&
+        event->key.keysym.sym == SDLK_PAGEUP)
+    {
+        virtual_menu_up = 0;
+        fprintf(stderr, "[controls] PageUp -> MENU UP released\n");
+    }
+
+    if (event->type == SDL_KEYDOWN &&
+        event->key.keysym.sym == SDLK_PAGEDOWN &&
+        !event->key.repeat)
+    {
+        virtual_menu_down = 1;
+        fprintf(stderr, "[controls] PageDown -> MENU DOWN held\n");
+    }
+
+    if (event->type == SDL_KEYUP &&
+        event->key.keysym.sym == SDLK_PAGEDOWN)
+    {
+        virtual_menu_down = 0;
+        fprintf(stderr, "[controls] PageDown -> MENU DOWN released\n");
+    }
+
     if (event->type == SDL_KEYDOWN &&
         event->key.keysym.sym == SDLK_e &&
         !event->key.repeat)
@@ -369,7 +444,9 @@ void controls_reset_input_state(void)
     virtual_coin1 = 0;
     virtual_start1 = 0;
     virtual_service = 0;
-    virtual_estop = 0;
+    virtual_menu_up = 0;
+    virtual_menu_down = 0;
+    virtual_estop = 1; /* pressed in / platform disabled, matching startup default */
     virtual_steer_left = 0;
     virtual_steer_right = 0;
     virtual_accel = 0;
