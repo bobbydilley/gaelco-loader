@@ -530,17 +530,37 @@ int glXMakeCurrent(Display *dpy, XID drawable, void *ctx)
  * GL_CONSTANT_COLOR0/1_NV using an extra multiply texture unit - first
  * unconditionally (made everything darker), then scoped to only the
  * combiner programs that actually reference it (introduced a blotchy red
- * pattern on character faces, worse than doing nothing) - both reverted.
- * Character skin tone rendering correctly without any of this suggests
- * the base texture*vertex-color modulation (which Mesa already does by
- * default, combiner or not) is enough on its own for most geometry; the
- * remaining discoloration (e.g. tinted UI text rendering plain white) is
- * a smaller, separate cosmetic gap left for another attempt.
+ * pattern on character faces) - both reverted. Character skin tone
+ * renders correctly without any of this, confirming the base
+ * texture*vertex-color modulation Mesa already does by default is enough
+ * for 3D geometry - it's specifically 2D UI (e.g. "INSERT COIN") that
+ * loses its tint, which suggests that geometry has no vertex color array
+ * of its own and relies entirely on GL_CONSTANT_COLOR0_NV for color.
+ *
+ * Third attempt, much narrower: just forward GL_CONSTANT_COLOR0_NV into a
+ * plain glColor4f() call - no texture units, no multitexture state at
+ * all. Anything using a per-vertex color array (which the correctly-
+ * rendering 3D characters clearly do) ignores glColor4f entirely, so this
+ * shouldn't be able to reintroduce the texture-unit regressions; anything
+ * that doesn't (2D UI, apparently) picks it up as intended.
  */
+typedef void (*glColor4f_t)(float r, float g, float b, float a);
+static glColor4f_t real_glColor4f = NULL;
+
 void glCombinerParameterfvNV(unsigned int pname, const float *params)
 {
-    (void)pname;
-    (void)params;
+    if (pname == 0x852A /* GL_CONSTANT_COLOR0_NV */ && params)
+    {
+        if (!real_glColor4f)
+        {
+            real_glColor4f = (glColor4f_t)dlsym(RTLD_NEXT, "glColor4f");
+        }
+
+        if (real_glColor4f)
+        {
+            real_glColor4f(params[0], params[1], params[2], params[3]);
+        }
+    }
 }
 
 void glCombinerParameteriNV(unsigned int pname, int param)
