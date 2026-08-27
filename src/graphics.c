@@ -587,6 +587,40 @@ void glCompressedTexImage2DARB(unsigned int target, int level, unsigned int inte
 }
 
 /*
+ * Uncompressed texture uploads - likely path for font/UI textures, which
+ * the compressed-texture log ruled out (that path's filtering/format/size
+ * all look correct and unremarkable). Logging these should show whether
+ * text specifically goes through a much smaller/lower-res texture that's
+ * then scaled up (blurring it), or uses different filtering than the 3D
+ * geometry.
+ */
+typedef void (*glTexImage2D_diag_t)(unsigned int target, int level, int internalformat, int width, int height, int border, unsigned int format, unsigned int type, const void *pixels);
+static glTexImage2D_diag_t real_glTexImage2D_diag = NULL;
+static int teximage_logged = 0;
+
+void glTexImage2D(unsigned int target, int level, int internalformat, int width, int height, int border, unsigned int format, unsigned int type, const void *pixels)
+{
+    if (!real_glTexImage2D_diag)
+    {
+        real_glTexImage2D_diag = (glTexImage2D_diag_t)dlsym(RTLD_NEXT, "glTexImage2D");
+    }
+
+    if (teximage_logged < 60)
+    {
+        teximage_logged++;
+        fprintf(stderr, "[graphics][texture] glTexImage2D target=0x%04x level=%d internalformat=0x%04x %dx%d format=0x%04x type=0x%04x\n",
+            target, level, internalformat, width, height, format, type);
+    }
+
+    if (real_glTexImage2D_diag)
+    {
+        real_glTexImage2D_diag(target, level, internalformat, width, height, border, format, type, pixels);
+    }
+
+    log_gl_errors("glTexImage2D");
+}
+
+/*
  * GL_NV_register_combiners is a fixed-function multitexture/lighting
  * pipeline that predates shaders - NVIDIA-only, never adopted by Mesa.
  * Reimplementing its exact per-stage math is out of scope, so these are
