@@ -11,8 +11,8 @@ volatile int virtual_test_button = 0;
 volatile int virtual_coin1 = 0;
 volatile int virtual_start1 = 0;
 volatile int virtual_service = 0;
-volatile int virtual_menu_up = 0;
-volatile int virtual_menu_down = 0;
+volatile int virtual_view = 0;
+volatile int virtual_siren = 0;
 volatile int virtual_volume_up = 0;
 volatile int virtual_volume_down = 0;
 /*
@@ -61,20 +61,21 @@ int controls_read_test_button(void *self)
  * MainLoop and every menu read from, plus two analog pot channels used
  * directly (not through Flancos/Nivel) for the wheel and pedals.
  *
- * Findings from static analysis of the port-decode logic, cross-checked
- * against the in-game "CONTROLS TEST" screen (test_io), which lists ten
- * labelled checks in this exact order: Siren, View, Break Pedal, Gas
- * Pedal, Coin Chute 1, Coin Chute 2, Service, Test, Volume, Security
- * (E-STOP). Matching each label to the Nivel()/Flancos() call it lines up
- * with in source order gives:
+ * Findings below are from static analysis of the port-decode logic,
+ * corrected against live testing on the in-game "CONTROLS TEST" screen
+ * (test_io) - the static guesses for View/Siren/Break Pedal/Gas Pedal
+ * were wrong (source order doesn't match on-screen order the way we
+ * assumed) and have been fixed up from what was actually observed:
  *
  *   Port 0x40 (digital, active-low unless noted):
- *     bit4 (0x10) -> Nivel(4,0x2000)  Gas Pedal (a floor-position
- *                    microswitch, separate from the analog pedal below)
- *     bit5 (0x20) -> Flancos(2,0x2000)  START / menu confirm / Siren.
- *                    ClaxonCar (the horn/siren sound) also fires off
- *                    Nivel(2,0x2000) - same physical switch as START, no
- *                    separate horn input exists in the port decode.
+ *     bit4 (0x10) -> Break Pedal, a floor-position microswitch. This is
+ *                    DIGITAL only - the pedal has no analog readout on
+ *                    the CONTROLS TEST screen, unlike the accelerator.
+ *                    Wired to virtual_brake (same key as the analog
+ *                    brake on port 0x46).
+ *     bit5 (0x20) -> Flancos(2,0x2000)  START / menu confirm. ClaxonCar
+ *                    (the horn sound) also fires off Nivel(2,0x2000) -
+ *                    same physical switch as START.
  *     bit6 (0x40) -> Nivel(2,0x4000), ACTIVE-HIGH. Security/E-STOP - the
  *                    motion platform "safety circuit OK" line. MainLoop's
  *                    Ramas state machine only shows the flashing "pull
@@ -85,13 +86,13 @@ int controls_read_test_button(void *self)
  *
  *   Port 0x41 (digital, active-low) - operator service panel, read
  *   directly (not through the analog wheel/pedal path):
- *     bit0 (0x01) -> Flancos(0,0x40) = Break Pedal (a floor-position
- *                    microswitch, same idea as the Gas Pedal one above).
- *                    testGetUserEntry() - what test_main_menu actually
- *                    polls to move its cursor - also reads this as
- *                    MENU UP, so it does double duty for navigation.
- *     bit1 (0x02) -> Flancos(0,0x20) = View (camera/view-change button).
- *                    Also read by testGetUserEntry() as MENU DOWN.
+ *     bit0 (0x01) -> Flancos(0,0x40) = View. Confirmed live: this is also
+ *                    what testGetUserEntry() (test_main_menu's cursor
+ *                    input) reads as one direction of test-menu nav, so
+ *                    View doubles as a menu button - matches a wheel
+ *                    cabinet with no dedicated joystick.
+ *     bit1 (0x02) -> Flancos(0,0x20) = Siren. Also read by
+ *                    testGetUserEntry() as the other nav direction.
  *     bit2 (0x04) -> Flancos(0,0x10), used as a select/activate button in
  *                    some test sub-screens (e.g. SoundTest) - not one of
  *                    the ten CONTROLS TEST items.
@@ -106,18 +107,17 @@ int controls_read_test_button(void *self)
  *   debug/service input path layered on top of the raw switches.
  *
  *   Ports 0x44/0x45/0x46 (raw 0-255 analog, fed straight into the POTE
- *   calibration struct, not through Flancos/Nivel - this is the actual
- *   analog wheel/pedal travel, separate from the floor microswitches
- *   above):
+ *   calibration struct, not through Flancos/Nivel):
  *     0x44 -> wheel  (INVERTED: game stores 0xFF - raw; center ~0x80)
- *     0x45 -> accelerator pedal (raw, uninverted)
- *     0x46 -> brake pedal (raw, uninverted)
+ *     0x45 -> accelerator pedal (raw, uninverted) - Gas Pedal's readout
+ *             on the CONTROLS TEST screen, confirmed showing 255 when held
+ *     0x46 -> brake pedal (raw, uninverted) - no on-screen readout, but
+ *             presumably used for actual braking force during gameplay
  *
- * Siren and Service read back as not-working in testing despite going
- * through the same mechanisms (a raw port40 bit, a port42 scancode) as
- * Security and Test, which do work - that's still unexplained; the
- * mapping above is what the static analysis and the on-screen order say,
- * but it needs another look with the actual debug log in hand.
+ * Service (port 0x42 scancode 0x10) still doesn't light up in testing
+ * despite going through the exact same keyboard-scancode mechanism as
+ * Test (scancode 0x14) and Volume (0x18/0x1c), which do work - still
+ * unexplained.
  */
 int controls_read_port(void *self, int port, char *value)
 {
@@ -131,11 +131,11 @@ int controls_read_port(void *self, int port, char *value)
         v = 0xFF;
         if (virtual_start1)
         {
-            v &= (unsigned char)~0x20; /* bit5 = START/Siren, active-low */
+            v &= (unsigned char)~0x20; /* bit5 = START (also the horn/siren sound), active-low */
         }
-        if (virtual_accel)
+        if (virtual_brake)
         {
-            v &= (unsigned char)~0x10; /* bit4 = Gas Pedal floor microswitch, active-low */
+            v &= (unsigned char)~0x10; /* bit4 = Break Pedal floor microswitch, active-low */
         }
         if (virtual_estop)
         {
@@ -145,13 +145,13 @@ int controls_read_port(void *self, int port, char *value)
 
     case 0x41:
         v = 0xFF;
-        if (virtual_menu_up || virtual_brake)
+        if (virtual_view)
         {
-            v &= (unsigned char)~0x01; /* bit0 = Break Pedal floor microswitch / MENU UP, active-low */
+            v &= (unsigned char)~0x01; /* bit0 = View, active-low */
         }
-        if (virtual_menu_down)
+        if (virtual_siren)
         {
-            v &= (unsigned char)~0x02; /* bit1 = View / MENU DOWN, active-low */
+            v &= (unsigned char)~0x02; /* bit1 = Siren, active-low */
         }
         if (virtual_service)
         {
@@ -356,34 +356,35 @@ void controls_handle_event(const SDL_Event *event)
         fprintf(stderr, "[controls] - -> VOLUME DOWN released\n");
     }
 
+    /* View and Siren double as test-menu up/down navigation - no separate nav switch exists. */
     if (event->type == SDL_KEYDOWN &&
-        event->key.keysym.sym == SDLK_PAGEUP &&
+        event->key.keysym.sym == SDLK_v &&
         !event->key.repeat)
     {
-        virtual_menu_up = 1;
-        fprintf(stderr, "[controls] PageUp -> MENU UP held\n");
+        virtual_view = 1;
+        fprintf(stderr, "[controls] V -> VIEW held\n");
     }
 
     if (event->type == SDL_KEYUP &&
-        event->key.keysym.sym == SDLK_PAGEUP)
+        event->key.keysym.sym == SDLK_v)
     {
-        virtual_menu_up = 0;
-        fprintf(stderr, "[controls] PageUp -> MENU UP released\n");
+        virtual_view = 0;
+        fprintf(stderr, "[controls] V -> VIEW released\n");
     }
 
     if (event->type == SDL_KEYDOWN &&
-        event->key.keysym.sym == SDLK_PAGEDOWN &&
+        event->key.keysym.sym == SDLK_s &&
         !event->key.repeat)
     {
-        virtual_menu_down = 1;
-        fprintf(stderr, "[controls] PageDown -> MENU DOWN held\n");
+        virtual_siren = 1;
+        fprintf(stderr, "[controls] S -> SIREN held\n");
     }
 
     if (event->type == SDL_KEYUP &&
-        event->key.keysym.sym == SDLK_PAGEDOWN)
+        event->key.keysym.sym == SDLK_s)
     {
-        virtual_menu_down = 0;
-        fprintf(stderr, "[controls] PageDown -> MENU DOWN released\n");
+        virtual_siren = 0;
+        fprintf(stderr, "[controls] S -> SIREN released\n");
     }
 
     if (event->type == SDL_KEYDOWN &&
@@ -479,8 +480,8 @@ void controls_reset_input_state(void)
     virtual_coin1 = 0;
     virtual_start1 = 0;
     virtual_service = 0;
-    virtual_menu_up = 0;
-    virtual_menu_down = 0;
+    virtual_view = 0;
+    virtual_siren = 0;
     virtual_volume_up = 0;
     virtual_volume_down = 0;
     virtual_estop = 1; /* pressed in / platform disabled, matching startup default */
