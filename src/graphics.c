@@ -1457,6 +1457,24 @@ static unsigned int vp_type = 0;
 static int vp_stride = 0;
 static const void *vp_pointer = NULL;
 
+static int wp_stride = 0;
+static unsigned int wp_type = 0;
+static const void *wp_pointer = NULL;
+
+/*
+ * The game doesn't necessarily disable GL_VERTEX_WEIGHTING_EXT before
+ * switching to unrelated (e.g. 2D UI/text) geometry - on real hardware
+ * that would be fine as long as it also doesn't leave a stale weight
+ * array bound, since the weight array's per-vertex entries only make
+ * sense paired with the *specific* position array they were meant for.
+ * We can't tell whether a newly-bound position array is meant to pair
+ * with whatever weight array happens to already be set, so the safe
+ * assumption is "no" - clear it here and require glVertexWeightPointerEXT
+ * to be re-supplied for each vertex array that actually wants weighting.
+ * Without this, a stale weight array (wrong stride/vertex count) can get
+ * applied to completely unrelated draws - e.g. text ending up
+ * oversized/distorted after a weighted 3D character rendered nearby.
+ */
 void glVertexPointer(int size, unsigned int type, int stride, const void *pointer)
 {
     resolve_weighting_gl();
@@ -1465,16 +1483,13 @@ void glVertexPointer(int size, unsigned int type, int stride, const void *pointe
     vp_type = type;
     vp_stride = stride;
     vp_pointer = pointer;
+    wp_pointer = NULL;
 
     if (real_glVertexPointer)
     {
         real_glVertexPointer(size, type, stride, pointer);
     }
 }
-
-static int wp_stride = 0;
-static unsigned int wp_type = 0;
-static const void *wp_pointer = NULL;
 
 void glVertexWeightPointerEXT(int size, unsigned int type, int stride, const void *pointer)
 {
