@@ -1198,8 +1198,16 @@ void glEnable(unsigned int cap)
 
     if (gaelco_real_glEnable)
     {
+        char pre_tag[64];
+        char post_tag[64];
+
+        snprintf(pre_tag, sizeof(pre_tag), "glEnable(0x%04x) - BEFORE forwarding", cap);
+        log_gl_errors(pre_tag);
+
         gaelco_real_glEnable(cap);
-        log_gl_errors("glEnable(unfiltered cap, forwarded to real GL)");
+
+        snprintf(post_tag, sizeof(post_tag), "glEnable(0x%04x) - AFTER forwarding", cap);
+        log_gl_errors(post_tag);
     }
 }
 
@@ -1221,8 +1229,16 @@ void glDisable(unsigned int cap)
 
     if (real_glDisable)
     {
+        char pre_tag[64];
+        char post_tag[64];
+
+        snprintf(pre_tag, sizeof(pre_tag), "glDisable(0x%04x) - BEFORE forwarding", cap);
+        log_gl_errors(pre_tag);
+
         real_glDisable(cap);
-        log_gl_errors("glDisable(unfiltered cap, forwarded to real GL)");
+
+        snprintf(post_tag, sizeof(post_tag), "glDisable(0x%04x) - AFTER forwarding", cap);
+        log_gl_errors(post_tag);
     }
 }
 
