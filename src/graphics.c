@@ -1149,11 +1149,41 @@ void glPopMatrix(void)
     }
 }
 
-/* glEnable/glDisable: forward everything except the two NV/EXT tokens
- * Mesa doesn't recognize, which we track ourselves instead. */
+/*
+ * glEnable/glDisable: forward everything except the two NV/EXT tokens
+ * Mesa doesn't recognize, which we track ourselves instead.
+ *
+ * The persistent, every-single-draw-call GL_INVALID_ENUM we're chasing
+ * means there's very likely a THIRD such cap we haven't identified and
+ * filtered yet - logged here per distinct value (only once each) so it
+ * shows up directly instead of needing another guess.
+ */
+#define GAELCO_MAX_SEEN_CAPS 64
+static unsigned int seen_caps[GAELCO_MAX_SEEN_CAPS];
+static int seen_caps_count = 0;
+
+static void log_cap_if_new(const char *fn, unsigned int cap)
+{
+    for (int i = 0; i < seen_caps_count; i++)
+    {
+        if (seen_caps[i] == cap)
+        {
+            return;
+        }
+    }
+
+    if (seen_caps_count < GAELCO_MAX_SEEN_CAPS)
+    {
+        seen_caps[seen_caps_count++] = cap;
+    }
+
+    fprintf(stderr, "[graphics][capstate] %s(0x%04x) - first time seeing this cap\n", fn, cap);
+}
+
 void glEnable(unsigned int cap)
 {
     resolve_weighting_gl();
+    log_cap_if_new("glEnable", cap);
 
     if (cap == GAELCO_GL_VERTEX_WEIGHTING_EXT)
     {
@@ -1169,12 +1199,14 @@ void glEnable(unsigned int cap)
     if (gaelco_real_glEnable)
     {
         gaelco_real_glEnable(cap);
+        log_gl_errors("glEnable(unfiltered cap, forwarded to real GL)");
     }
 }
 
 void glDisable(unsigned int cap)
 {
     resolve_weighting_gl();
+    log_cap_if_new("glDisable", cap);
 
     if (cap == GAELCO_GL_VERTEX_WEIGHTING_EXT)
     {
@@ -1190,6 +1222,7 @@ void glDisable(unsigned int cap)
     if (real_glDisable)
     {
         real_glDisable(cap);
+        log_gl_errors("glDisable(unfiltered cap, forwarded to real GL)");
     }
 }
 
