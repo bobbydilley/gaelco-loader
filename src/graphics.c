@@ -1095,6 +1095,46 @@ void glDisable(unsigned int cap)
     }
 }
 
+/*
+ * Diagnostic for the blurry-text report: if the game's glViewport size
+ * doesn't match the SDL window's actual drawable pixel size, the GPU
+ * scales the rendered image to fit, which blurs sharp edges like font
+ * glyphs far more visibly than it blurs 3D geometry/textures - a classic
+ * cause of "text looks soft but everything else looks okay-ish".
+ */
+typedef void (*glViewport_t)(int x, int y, int width, int height);
+static glViewport_t real_glViewport = NULL;
+static int viewport_logged = 0;
+
+void glViewport(int x, int y, int width, int height)
+{
+    if (!real_glViewport)
+    {
+        real_glViewport = (glViewport_t)dlsym(RTLD_NEXT, "glViewport");
+    }
+
+    if (!viewport_logged)
+    {
+        viewport_logged = 1;
+
+        int drawable_w = 0;
+        int drawable_h = 0;
+
+        if (sdl_window)
+        {
+            SDL_GL_GetDrawableSize(sdl_window, &drawable_w, &drawable_h);
+        }
+
+        fprintf(stderr, "[graphics][viewport] glViewport(%d,%d,%d,%d) vs SDL window %dx%d, GL drawable %dx%d\n",
+            x, y, width, height, window_width, window_height, drawable_w, drawable_h);
+    }
+
+    if (real_glViewport)
+    {
+        real_glViewport(x, y, width, height);
+    }
+}
+
 static int vp_size = 0;
 static unsigned int vp_type = 0;
 static int vp_stride = 0;
@@ -1339,21 +1379,29 @@ void glDrawElements(unsigned int mode, int count, unsigned int type, const void 
         real_glVertexAttribPointer && real_glEnableVertexAttribArray && real_glDisableVertexAttribArray)
     {
         real_glUseProgram(weight_shader_program);
+        log_gl_errors("weight shader: glUseProgram(program)");
 
         if (weight_uniform_modelview1 >= 0)
         {
             real_glUniformMatrix4fv(weight_uniform_modelview1, 1, 0, modelview1_stack[modelview1_sp].m);
+            log_gl_errors("weight shader: glUniformMatrix4fv");
         }
 
         real_glEnableVertexAttribArray(GAELCO_WEIGHT_ATTRIB_LOCATION);
+        log_gl_errors("weight shader: glEnableVertexAttribArray");
+
         real_glVertexAttribPointer(GAELCO_WEIGHT_ATTRIB_LOCATION, 1, 0x1406 /* GL_FLOAT */, 0, wp_stride, wp_pointer);
+        log_gl_errors("weight shader: glVertexAttribPointer");
 
         real_glDrawElements(mode, count, type, indices);
+        log_gl_errors("weight shader: glDrawElements itself");
 
         real_glDisableVertexAttribArray(GAELCO_WEIGHT_ATTRIB_LOCATION);
-        real_glUseProgram(0);
+        log_gl_errors("weight shader: glDisableVertexAttribArray");
 
-        log_gl_errors("glDrawElements (weight shader)");
+        real_glUseProgram(0);
+        log_gl_errors("weight shader: glUseProgram(0)");
+
         return;
     }
 
