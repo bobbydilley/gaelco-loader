@@ -556,12 +556,19 @@ void glTexParameteri(unsigned int target, unsigned int pname, int param)
             target, pname == 0x2801 ? "MIN_FILTER" : "MAG_FILTER", (unsigned int)param);
     }
 
+    char pre_tag[96];
+    char post_tag[96];
+    snprintf(pre_tag, sizeof(pre_tag), "glTexParameteri(target=0x%04x,pname=0x%04x,param=0x%04x) - BEFORE", target, pname, (unsigned int)param);
+    snprintf(post_tag, sizeof(post_tag), "glTexParameteri(target=0x%04x,pname=0x%04x,param=0x%04x) - AFTER", target, pname, (unsigned int)param);
+
+    log_gl_errors(pre_tag);
+
     if (real)
     {
         real(target, pname, param);
     }
 
-    log_gl_errors("glTexParameteri");
+    log_gl_errors(post_tag);
 }
 
 void glCompressedTexImage2DARB(unsigned int target, int level, unsigned int internalformat, int width, int height, int border, int imageSize, const void *data)
@@ -759,19 +766,25 @@ void glShadeModel(unsigned int mode)
 void glActiveTextureARB(unsigned int texture)
 {
     if (!real_glActiveTextureARB_diag) real_glActiveTextureARB_diag = (glActiveTextureARB_diag_t)dlsym(RTLD_NEXT, "glActiveTextureARB");
+    char pre_tag[80];
+    char post_tag[80];
+    snprintf(pre_tag, sizeof(pre_tag), "glActiveTextureARB(texture=0x%04x) - BEFORE", texture);
+    snprintf(post_tag, sizeof(post_tag), "glActiveTextureARB(texture=0x%04x) - AFTER", texture);
+    log_gl_errors(pre_tag);
     if (real_glActiveTextureARB_diag) real_glActiveTextureARB_diag(texture);
-    char tag[80];
-    snprintf(tag, sizeof(tag), "glActiveTextureARB(texture=0x%04x)", texture);
-    log_gl_errors(tag);
+    log_gl_errors(post_tag);
 }
 
 void glClientActiveTextureARB(unsigned int texture)
 {
     if (!real_glClientActiveTextureARB_diag) real_glClientActiveTextureARB_diag = (glClientActiveTextureARB_diag_t)dlsym(RTLD_NEXT, "glClientActiveTextureARB");
+    char pre_tag[80];
+    char post_tag[80];
+    snprintf(pre_tag, sizeof(pre_tag), "glClientActiveTextureARB(texture=0x%04x) - BEFORE", texture);
+    snprintf(post_tag, sizeof(post_tag), "glClientActiveTextureARB(texture=0x%04x) - AFTER", texture);
+    log_gl_errors(pre_tag);
     if (real_glClientActiveTextureARB_diag) real_glClientActiveTextureARB_diag(texture);
-    char tag[80];
-    snprintf(tag, sizeof(tag), "glClientActiveTextureARB(texture=0x%04x)", texture);
-    log_gl_errors(tag);
+    log_gl_errors(post_tag);
 }
 
 /*
