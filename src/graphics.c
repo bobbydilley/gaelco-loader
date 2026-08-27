@@ -580,6 +580,11 @@ static int const_color_enabled[2] = {0, 0};
  * glFinalCombinerInputNV below. */
 static int program_uses_const[2] = {0, 0};
 
+/* Defined further down alongside the vertex-weighting emulation, which
+ * also needs to override glEnable/glDisable globally - declared here so
+ * resolve_real_gl() below can resolve/use it too. */
+extern void (*gaelco_real_glEnable)(unsigned int cap);
+
 static void resolve_real_gl(void)
 {
     if (real_glActiveTextureARB)
@@ -601,10 +606,6 @@ static void resolve_real_gl(void)
         gaelco_real_glEnable = (void (*)(unsigned int))dlsym(RTLD_NEXT, "glEnable");
     }
 }
-
-/* real_glEnable is shared with the vertex-weighting emulation further
- * down, which also needs to override glEnable/glDisable globally. */
-extern void (*gaelco_real_glEnable)(unsigned int cap);
 
 static void apply_constant_color(int slot, unsigned int texture_unit, const float *params, int in_use)
 {
