@@ -1145,6 +1145,175 @@ static unsigned int read_index(const void *indices, unsigned int type, int i)
 
 static float blend_scratch[GAELCO_MAX_BLEND_VERTS * 3];
 
+/*
+ * GPU path: do the weight*M0 + (1-weight)*M1 blend in a vertex shader
+ * instead of a per-vertex CPU loop. Blending the two 4x4 matrices first
+ * and then transforming is mathematically identical to blending the two
+ * already-transformed points (matrix multiplication distributes over
+ * addition/scalar multiplication), so this is the same math as the CPU
+ * path, just executed per-vertex on the GPU in parallel instead of in a
+ * C loop - which also means the original glDrawElements call (indices,
+ * vertex pointer, everything) is used completely unmodified, no scratch
+ * buffer or draw-call substitution needed.
+ *
+ * Trade-off: a custom vertex shader replaces Mesa's fixed-function vertex
+ * processing entirely, including per-vertex lighting, and doing that
+ * properly (replicating glLight/glMaterial's equations) is a further
+ * chunk of work: this version passes the vertex color straight through
+ * unlit, which is simpler/lower-risk but will look flatter-shaded than
+ * before on these specific meshes. If that turns out to matter visually,
+ * lighting can be added as a follow-up.
+ *
+ * The mesh's own normal/color/texcoord arrays are left completely alone -
+ * only position is affected - and 4.6 Mesa Compatibility Profile (per
+ * the driver info logged earlier) supports GLSL 1.20 natively, so no new
+ * library dependency is needed. If shader setup fails for any reason, we
+ * fall back to the CPU path below rather than drawing incorrectly.
+ */
+#define GAELCO_WEIGHT_ATTRIB_LOCATION 7
+
+typedef unsigned int (*glCreateShader_t)(unsigned int type);
+typedef void (*glShaderSource_t)(unsigned int shader, int count, const char *const *string, const int *length);
+typedef void (*glCompileShader_t)(unsigned int shader);
+typedef void (*glGetShaderiv_t)(unsigned int shader, unsigned int pname, int *params);
+typedef void (*glGetShaderInfoLog_t)(unsigned int shader, int bufSize, int *length, char *infoLog);
+typedef unsigned int (*glCreateProgram_t)(void);
+typedef void (*glAttachShader_t)(unsigned int program, unsigned int shader);
+typedef void (*glBindAttribLocation_t)(unsigned int program, unsigned int index, const char *name);
+typedef void (*glLinkProgram_t)(unsigned int program);
+typedef void (*glGetProgramiv_t)(unsigned int program, unsigned int pname, int *params);
+typedef void (*glGetProgramInfoLog_t)(unsigned int program, int bufSize, int *length, char *infoLog);
+typedef void (*glUseProgram_t)(unsigned int program);
+typedef int (*glGetUniformLocation_t)(unsigned int program, const char *name);
+typedef void (*glUniformMatrix4fv_t)(int location, int count, unsigned char transpose, const float *value);
+typedef void (*glVertexAttribPointer_t)(unsigned int index, int size, unsigned int type, unsigned char normalized, int stride, const void *pointer);
+typedef void (*glEnableVertexAttribArray_t)(unsigned int index);
+typedef void (*glDisableVertexAttribArray_t)(unsigned int index);
+typedef void (*glDeleteShader_t)(unsigned int shader);
+
+static glCreateShader_t real_glCreateShader = NULL;
+static glShaderSource_t real_glShaderSource = NULL;
+static glCompileShader_t real_glCompileShader = NULL;
+static glGetShaderiv_t real_glGetShaderiv = NULL;
+static glGetShaderInfoLog_t real_glGetShaderInfoLog = NULL;
+static glCreateProgram_t real_glCreateProgram = NULL;
+static glAttachShader_t real_glAttachShader = NULL;
+static glBindAttribLocation_t real_glBindAttribLocation = NULL;
+static glLinkProgram_t real_glLinkProgram = NULL;
+static glGetProgramiv_t real_glGetProgramiv = NULL;
+static glGetProgramInfoLog_t real_glGetProgramInfoLog = NULL;
+static glUseProgram_t real_glUseProgram = NULL;
+static glGetUniformLocation_t real_glGetUniformLocation = NULL;
+static glUniformMatrix4fv_t real_glUniformMatrix4fv = NULL;
+static glVertexAttribPointer_t real_glVertexAttribPointer = NULL;
+static glEnableVertexAttribArray_t real_glEnableVertexAttribArray = NULL;
+static glDisableVertexAttribArray_t real_glDisableVertexAttribArray = NULL;
+static glDeleteShader_t real_glDeleteShader = NULL;
+
+static unsigned int weight_shader_program = 0;
+static int weight_uniform_modelview1 = -1;
+static int weight_shader_attempted = 0;
+
+static const char *weight_vertex_shader_src =
+    "#version 120\n"
+    "attribute float weight;\n"
+    "uniform mat4 modelview1;\n"
+    "void main()\n"
+    "{\n"
+    "    mat4 blended = weight * gl_ModelViewMatrix + (1.0 - weight) * modelview1;\n"
+    "    gl_Position = gl_ProjectionMatrix * (blended * gl_Vertex);\n"
+    "    gl_FrontColor = gl_Color;\n"
+    "    gl_TexCoord[0] = gl_MultiTexCoord0;\n"
+    "}\n";
+
+static void resolve_shader_gl(void)
+{
+    if (real_glCreateShader)
+    {
+        return;
+    }
+
+    real_glCreateShader = (glCreateShader_t)dlsym(RTLD_NEXT, "glCreateShader");
+    real_glShaderSource = (glShaderSource_t)dlsym(RTLD_NEXT, "glShaderSource");
+    real_glCompileShader = (glCompileShader_t)dlsym(RTLD_NEXT, "glCompileShader");
+    real_glGetShaderiv = (glGetShaderiv_t)dlsym(RTLD_NEXT, "glGetShaderiv");
+    real_glGetShaderInfoLog = (glGetShaderInfoLog_t)dlsym(RTLD_NEXT, "glGetShaderInfoLog");
+    real_glCreateProgram = (glCreateProgram_t)dlsym(RTLD_NEXT, "glCreateProgram");
+    real_glAttachShader = (glAttachShader_t)dlsym(RTLD_NEXT, "glAttachShader");
+    real_glBindAttribLocation = (glBindAttribLocation_t)dlsym(RTLD_NEXT, "glBindAttribLocation");
+    real_glLinkProgram = (glLinkProgram_t)dlsym(RTLD_NEXT, "glLinkProgram");
+    real_glGetProgramiv = (glGetProgramiv_t)dlsym(RTLD_NEXT, "glGetProgramiv");
+    real_glGetProgramInfoLog = (glGetProgramInfoLog_t)dlsym(RTLD_NEXT, "glGetProgramInfoLog");
+    real_glUseProgram = (glUseProgram_t)dlsym(RTLD_NEXT, "glUseProgram");
+    real_glGetUniformLocation = (glGetUniformLocation_t)dlsym(RTLD_NEXT, "glGetUniformLocation");
+    real_glUniformMatrix4fv = (glUniformMatrix4fv_t)dlsym(RTLD_NEXT, "glUniformMatrix4fv");
+    real_glVertexAttribPointer = (glVertexAttribPointer_t)dlsym(RTLD_NEXT, "glVertexAttribPointer");
+    real_glEnableVertexAttribArray = (glEnableVertexAttribArray_t)dlsym(RTLD_NEXT, "glEnableVertexAttribArray");
+    real_glDisableVertexAttribArray = (glDisableVertexAttribArray_t)dlsym(RTLD_NEXT, "glDisableVertexAttribArray");
+    real_glDeleteShader = (glDeleteShader_t)dlsym(RTLD_NEXT, "glDeleteShader");
+}
+
+static void ensure_weight_shader(void)
+{
+    if (weight_shader_attempted)
+    {
+        return;
+    }
+
+    weight_shader_attempted = 1;
+    resolve_shader_gl();
+
+    if (!real_glCreateShader || !real_glShaderSource || !real_glCompileShader ||
+        !real_glGetShaderiv || !real_glGetShaderInfoLog || !real_glCreateProgram ||
+        !real_glAttachShader || !real_glBindAttribLocation || !real_glLinkProgram ||
+        !real_glGetProgramiv || !real_glGetProgramInfoLog || !real_glGetUniformLocation ||
+        !real_glDeleteShader)
+    {
+        fprintf(stderr, "[graphics][weight] GPU shader path unavailable (missing GL 2.0 entry points), staying on CPU path\n");
+        return;
+    }
+
+    unsigned int shader = real_glCreateShader(0x8B31 /* GL_VERTEX_SHADER */);
+    real_glShaderSource(shader, 1, &weight_vertex_shader_src, NULL);
+    real_glCompileShader(shader);
+
+    int compiled = 0;
+    real_glGetShaderiv(shader, 0x8B81 /* GL_COMPILE_STATUS */, &compiled);
+
+    if (!compiled)
+    {
+        char log[1024];
+        int len = 0;
+        real_glGetShaderInfoLog(shader, sizeof(log), &len, log);
+        fprintf(stderr, "[graphics][weight] vertex shader compile failed, staying on CPU path: %.*s\n", len, log);
+        real_glDeleteShader(shader);
+        return;
+    }
+
+    unsigned int program = real_glCreateProgram();
+    real_glAttachShader(program, shader);
+    real_glBindAttribLocation(program, GAELCO_WEIGHT_ATTRIB_LOCATION, "weight");
+    real_glLinkProgram(program);
+
+    int linked = 0;
+    real_glGetProgramiv(program, 0x8B82 /* GL_LINK_STATUS */, &linked);
+
+    if (!linked)
+    {
+        char log[1024];
+        int len = 0;
+        real_glGetProgramInfoLog(program, sizeof(log), &len, log);
+        fprintf(stderr, "[graphics][weight] shader program link failed, staying on CPU path: %.*s\n", len, log);
+        real_glDeleteShader(shader);
+        return;
+    }
+
+    weight_uniform_modelview1 = real_glGetUniformLocation(program, "modelview1");
+    weight_shader_program = program;
+
+    fprintf(stderr, "[graphics][weight] GPU vertex-weighting shader ready (program=%u)\n", program);
+}
+
 void glDrawElements(unsigned int mode, int count, unsigned int type, const void *indices)
 {
     resolve_weighting_gl();
@@ -1154,11 +1323,44 @@ void glDrawElements(unsigned int mode, int count, unsigned int type, const void 
         return;
     }
 
-    int can_blend = vertex_weighting_enabled && wp_pointer && vp_pointer &&
+    int weighted_draw = vertex_weighting_enabled && wp_pointer && vp_pointer &&
         vp_size == 3 && vp_type == 0x1406 /* GL_FLOAT */ && wp_type == 0x1406 /* GL_FLOAT */ &&
-        count > 0 && count <= GAELCO_MAX_BLEND_VERTS && real_glVertexPointer &&
+        count > 0 && indices;
+
+    if (!weighted_draw)
+    {
+        real_glDrawElements(mode, count, type, indices);
+        return;
+    }
+
+    ensure_weight_shader();
+
+    if (weight_shader_program && real_glUseProgram && real_glUniformMatrix4fv &&
+        real_glVertexAttribPointer && real_glEnableVertexAttribArray && real_glDisableVertexAttribArray)
+    {
+        real_glUseProgram(weight_shader_program);
+
+        if (weight_uniform_modelview1 >= 0)
+        {
+            real_glUniformMatrix4fv(weight_uniform_modelview1, 1, 0, modelview1_stack[modelview1_sp].m);
+        }
+
+        real_glEnableVertexAttribArray(GAELCO_WEIGHT_ATTRIB_LOCATION);
+        real_glVertexAttribPointer(GAELCO_WEIGHT_ATTRIB_LOCATION, 1, 0x1406 /* GL_FLOAT */, 0, wp_stride, wp_pointer);
+
+        real_glDrawElements(mode, count, type, indices);
+
+        real_glDisableVertexAttribArray(GAELCO_WEIGHT_ATTRIB_LOCATION);
+        real_glUseProgram(0);
+
+        log_gl_errors("glDrawElements (weight shader)");
+        return;
+    }
+
+    /* GPU path unavailable - fall back to the CPU blend. */
+    int can_blend = count <= GAELCO_MAX_BLEND_VERTS && real_glVertexPointer &&
         real_glGetFloatv && real_glGetIntegerv && real_glMatrixMode && real_glLoadIdentity &&
-        real_glPushMatrix && real_glPopMatrix && real_glDrawArrays && indices;
+        real_glPushMatrix && real_glPopMatrix && real_glDrawArrays;
 
     if (!can_blend)
     {
