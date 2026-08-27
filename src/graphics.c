@@ -535,9 +535,22 @@ int glXMakeCurrent(Display *dpy, XID drawable, void *ctx)
  */
 typedef void (*glCompressedTexImage2DARB_t)(unsigned int target, int level, unsigned int internalformat, int width, int height, int border, int imageSize, const void *data);
 static glCompressedTexImage2DARB_t real_glCompressedTexImage2DARB = NULL;
-static int texparam_logged = 0;
 static int compressedtex_logged = 0;
 
+/*
+ * The game calls glTexParameteri(0x8501, GL_TEXTURE_{MIN_LOD,MAX_LOD,
+ * BASE_LEVEL,MAX_LEVEL}, ...) to clamp each texture's usable mipmap
+ * range - but 0x8501 (GL_TEXTURE_LOD_BIAS_EXT) is a parameter *name*, not
+ * a valid texture target, so it's a latent bug in the game's own code.
+ * NVIDIA's original driver evidently tolerated it; Mesa correctly rejects
+ * it with GL_INVALID_ENUM, which means these calls have been silently
+ * doing nothing at all on Mesa - leaving mipmap ranges unclamped. That's
+ * a solid, unifying explanation for both blurry text and (if the game
+ * uses texture level/region swaps for text colour, a common
+ * shader-less palette trick) the lost tint: correct the target to
+ * GL_TEXTURE_2D, matching every other texture call we've observed, and
+ * let the call through as originally intended instead of dropping it.
+ */
 void glTexParameteri(unsigned int target, unsigned int pname, int param)
 {
     typedef void (*glTexParameteri_diag_t)(unsigned int, unsigned int, int);
@@ -548,27 +561,17 @@ void glTexParameteri(unsigned int target, unsigned int pname, int param)
         real = (glTexParameteri_diag_t)dlsym(RTLD_NEXT, "glTexParameteri");
     }
 
-    if ((pname == 0x2801 /* GL_TEXTURE_MIN_FILTER */ || pname == 0x2800 /* GL_TEXTURE_MAG_FILTER */) &&
-        texparam_logged < 40)
+    if (target == 0x8501 /* bogus - actually GL_TEXTURE_LOD_BIAS_EXT, not a target */ &&
+        (pname == 0x813A /* GL_TEXTURE_MIN_LOD */ || pname == 0x813B /* GL_TEXTURE_MAX_LOD */ ||
+         pname == 0x813C /* GL_TEXTURE_BASE_LEVEL */ || pname == 0x813D /* GL_TEXTURE_MAX_LEVEL */))
     {
-        texparam_logged++;
-        fprintf(stderr, "[graphics][texture] glTexParameteri target=0x%04x pname=%s param=0x%04x\n",
-            target, pname == 0x2801 ? "MIN_FILTER" : "MAG_FILTER", (unsigned int)param);
+        target = 0x0DE1 /* GL_TEXTURE_2D */;
     }
-
-    char pre_tag[96];
-    char post_tag[96];
-    snprintf(pre_tag, sizeof(pre_tag), "glTexParameteri(target=0x%04x,pname=0x%04x,param=0x%04x) - BEFORE", target, pname, (unsigned int)param);
-    snprintf(post_tag, sizeof(post_tag), "glTexParameteri(target=0x%04x,pname=0x%04x,param=0x%04x) - AFTER", target, pname, (unsigned int)param);
-
-    log_gl_errors(pre_tag);
 
     if (real)
     {
         real(target, pname, param);
     }
-
-    log_gl_errors(post_tag);
 }
 
 void glCompressedTexImage2DARB(unsigned int target, int level, unsigned int internalformat, int width, int height, int border, int imageSize, const void *data)
