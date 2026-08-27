@@ -514,12 +514,76 @@ int glXMakeCurrent(Display *dpy, XID drawable, void *ctx)
                 (extensions && strstr((const char *)extensions, "GL_ARB_multitexture")) ? "yes" : "no");
             fprintf(stderr, "[graphics][GL] has GL_EXT_vertex_weighting=%s\n",
                 (extensions && strstr((const char *)extensions, "GL_EXT_vertex_weighting")) ? "yes" : "no");
+            fprintf(stderr, "[graphics][GL] has GL_EXT_texture_compression_s3tc=%s\n",
+                (extensions && strstr((const char *)extensions, "GL_EXT_texture_compression_s3tc")) ? "yes" : "no");
         }
     }
 
     log_gl_errors("glXMakeCurrent");
 
     return result;
+}
+
+/*
+ * Diagnostic for the blurry-text report, now that viewport/window size is
+ * ruled out: log the game's own texture filtering choices and whether its
+ * compressed-texture uploads (it imports glCompressedTexImage2DARB, so it
+ * does use S3TC/DXT-style compression for at least some textures) succeed
+ * on this driver. If Mesa doesn't like the compressed format the game is
+ * uploading, or filtering isn't what the game asked for, that would
+ * explain soft-looking text while other geometry looks fine.
+ */
+typedef void (*glCompressedTexImage2DARB_t)(unsigned int target, int level, unsigned int internalformat, int width, int height, int border, int imageSize, const void *data);
+static glCompressedTexImage2DARB_t real_glCompressedTexImage2DARB = NULL;
+static int texparam_logged = 0;
+static int compressedtex_logged = 0;
+
+void glTexParameteri(unsigned int target, unsigned int pname, int param)
+{
+    typedef void (*glTexParameteri_diag_t)(unsigned int, unsigned int, int);
+    static glTexParameteri_diag_t real = NULL;
+
+    if (!real)
+    {
+        real = (glTexParameteri_diag_t)dlsym(RTLD_NEXT, "glTexParameteri");
+    }
+
+    if ((pname == 0x2801 /* GL_TEXTURE_MIN_FILTER */ || pname == 0x2800 /* GL_TEXTURE_MAG_FILTER */) &&
+        texparam_logged < 40)
+    {
+        texparam_logged++;
+        fprintf(stderr, "[graphics][texture] glTexParameteri target=0x%04x pname=%s param=0x%04x\n",
+            target, pname == 0x2801 ? "MIN_FILTER" : "MAG_FILTER", (unsigned int)param);
+    }
+
+    if (real)
+    {
+        real(target, pname, param);
+    }
+
+    log_gl_errors("glTexParameteri");
+}
+
+void glCompressedTexImage2DARB(unsigned int target, int level, unsigned int internalformat, int width, int height, int border, int imageSize, const void *data)
+{
+    if (!real_glCompressedTexImage2DARB)
+    {
+        real_glCompressedTexImage2DARB = (glCompressedTexImage2DARB_t)dlsym(RTLD_NEXT, "glCompressedTexImage2DARB");
+    }
+
+    if (compressedtex_logged < 40)
+    {
+        compressedtex_logged++;
+        fprintf(stderr, "[graphics][texture] glCompressedTexImage2DARB target=0x%04x level=%d format=0x%04x %dx%d imageSize=%d\n",
+            target, level, internalformat, width, height, imageSize);
+    }
+
+    if (real_glCompressedTexImage2DARB)
+    {
+        real_glCompressedTexImage2DARB(target, level, internalformat, width, height, border, imageSize, data);
+    }
+
+    log_gl_errors("glCompressedTexImage2DARB");
 }
 
 /*
@@ -1356,6 +1420,12 @@ static void ensure_weight_shader(void)
 
 void glDrawElements(unsigned int mode, int count, unsigned int type, const void *indices)
 {
+    /* glUseProgram has no enum parameter and can never itself raise
+     * GL_INVALID_ENUM, so if that's where the error is landing it must be
+     * latched from something earlier in the frame. Check right at entry,
+     * before touching anything, to see whether it's already queued. */
+    log_gl_errors("glDrawElements: entry (before any of our code runs)");
+
     resolve_weighting_gl();
 
     if (!real_glDrawElements)
