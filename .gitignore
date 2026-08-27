@@ -15,7 +15,6 @@ scripts/linuxdeploy-x86_64
 
 # Linker output
 *.ilk
-*.map
 *.exp
 
 # Precompiled Headers

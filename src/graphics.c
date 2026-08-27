@@ -436,3 +436,134 @@ int _XF86VidModeGetGammaRamp(
 
     return 1;
 }
+
+/*
+ * GL_NV_register_combiners is a fixed-function multitexture/lighting
+ * pipeline that predates shaders - NVIDIA-only, never adopted by Mesa.
+ * Reimplementing its exact per-stage math (which specific combiner
+ * programs this game sets up isn't something we can recover generically)
+ * is out of scope, so these are deliberately inert: the state they'd
+ * configure is simply dropped. The game still issues plenty of ordinary
+ * texture/material/lighting calls (glBindTexture, glTexEnv, glLightfv,
+ * etc.) around these, so geometry still gets textured and lit through the
+ * standard fixed-function pipeline - it just won't get whatever extra
+ * per-pixel blending the combiners would have added on NVIDIA hardware.
+ * The important part is that these calls no longer crash the process on
+ * Mesa, which is what turns "half-rendered / flat-shaded" into "correct
+ * enough to play."
+ */
+void glCombinerParameterfvNV(unsigned int pname, const float *params)
+{
+    (void)pname;
+    (void)params;
+}
+
+void glCombinerParameteriNV(unsigned int pname, int param)
+{
+    (void)pname;
+    (void)param;
+}
+
+void glCombinerInputNV(unsigned int stage, unsigned int portion, unsigned int variable, unsigned int input, unsigned int mapping, unsigned int componentUsage)
+{
+    (void)stage;
+    (void)portion;
+    (void)variable;
+    (void)input;
+    (void)mapping;
+    (void)componentUsage;
+}
+
+void glCombinerOutputNV(unsigned int stage, unsigned int portion, unsigned int abOutput, unsigned int cdOutput, unsigned int sumOutput, unsigned int scale, unsigned int bias, unsigned char abDotProduct, unsigned char cdDotProduct, unsigned char muxSum)
+{
+    (void)stage;
+    (void)portion;
+    (void)abOutput;
+    (void)cdOutput;
+    (void)sumOutput;
+    (void)scale;
+    (void)bias;
+    (void)abDotProduct;
+    (void)cdDotProduct;
+    (void)muxSum;
+}
+
+void glFinalCombinerInputNV(unsigned int variable, unsigned int input, unsigned int mapping, unsigned int componentUsage)
+{
+    (void)variable;
+    (void)input;
+    (void)mapping;
+    (void)componentUsage;
+}
+
+/*
+ * GL_NV_fence: the game only calls glGenFencesNV (not SetFenceNV/
+ * TestFenceNV/FinishFenceNV/IsFenceNV, which aren't in its import table,
+ * so it's presumably only using this to probe for the extension or as
+ * dead code). Handing back distinct nonzero-looking handles is enough to
+ * satisfy the call without crashing; nothing ever waits on them.
+ */
+void glGenFencesNV(int n, unsigned int *fences)
+{
+    if (!fences)
+    {
+        return;
+    }
+
+    for (int i = 0; i < n; i++)
+    {
+        fences[i] = (unsigned int)(i + 1);
+    }
+}
+
+/*
+ * GL_NV_vertex_array_range / GLX_NV_vertex_array_range: an NVIDIA-only
+ * fast path for streaming vertex data through pinned AGP/VRAM memory.
+ * glVertexArrayRangeNV is purely a performance hint (it just marks a
+ * range as eligible for the fast path) - safe to drop entirely, since the
+ * game still submits geometry through the ordinary glVertexPointer/
+ * glDrawElements calls either way. glXAllocateMemoryNV must return real,
+ * usable memory though: the game uses it as its vertex/texture storage,
+ * and a NULL return would look like an allocation failure. Regular heap
+ * memory works fine here - we just don't get the AGP fast path, which
+ * doesn't matter on modern hardware.
+ */
+void glVertexArrayRangeNV(int length, const void *pointer)
+{
+    (void)length;
+    (void)pointer;
+}
+
+void *glXAllocateMemoryNV(int size, float readfreq, float writefreq, float priority)
+{
+    (void)readfreq;
+    (void)writefreq;
+    (void)priority;
+
+    if (size <= 0)
+    {
+        return NULL;
+    }
+
+    return malloc((size_t)size);
+}
+
+void glXFreeMemoryNV(void *pointer)
+{
+    free(pointer);
+}
+
+/*
+ * GL_EXT_vertex_weighting: GPU-side vertex blending for skinned meshes.
+ * Dropped for the same reason as the combiners above - the characters in
+ * testing still animate correctly, which means this path either isn't
+ * exercised on this game's models or the skinning is otherwise done
+ * CPU-side already.
+ */
+void glVertexWeightPointerEXT(int size, unsigned int type, int stride, const void *pointer)
+{
+    (void)size;
+    (void)type;
+    (void)stride;
+    (void)pointer;
+}

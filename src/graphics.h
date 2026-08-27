@@ -28,4 +28,28 @@ int _XF86VidModeSetGammaRamp(
     unsigned short *green,
     unsigned short *blue);
 
+/*
+ * The game links directly against several NVIDIA-only GL/GLX extensions
+ * (GL_NV_register_combiners, GL_NV_fence, GL_NV_vertex_array_range,
+ * GLX_NV_vertex_array_range, GL_EXT_vertex_weighting) that Mesa/Intel
+ * drivers don't export. These are plain dynamic symbols the game calls
+ * directly (not resolved via glXGetProcAddress), so on Mesa the process
+ * either fails to start or crashes the first time one is actually called.
+ * Exporting them from this LD_PRELOAD library satisfies the game's linker
+ * needs on any driver. See graphics.c for what each one actually does.
+ */
+void glCombinerParameterfvNV(unsigned int pname, const float *params);
+void glCombinerParameteriNV(unsigned int pname, int param);
+void glCombinerInputNV(unsigned int stage, unsigned int portion, unsigned int variable, unsigned int input, unsigned int mapping, unsigned int componentUsage);
+void glCombinerOutputNV(unsigned int stage, unsigned int portion, unsigned int abOutput, unsigned int cdOutput, unsigned int sumOutput, unsigned int scale, unsigned int bias, unsigned char abDotProduct, unsigned char cdDotProduct, unsigned char muxSum);
+void glFinalCombinerInputNV(unsigned int variable, unsigned int input, unsigned int mapping, unsigned int componentUsage);
+
+void glGenFencesNV(int n, unsigned int *fences);
+
+void glVertexArrayRangeNV(int length, const void *pointer);
+void *glXAllocateMemoryNV(int size, float readfreq, float writefreq, float priority);
+void glXFreeMemoryNV(void *pointer);
+
+void glVertexWeightPointerEXT(int size, unsigned int type, int stride, const void *pointer);
+
 #endif
