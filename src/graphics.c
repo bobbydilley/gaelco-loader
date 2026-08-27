@@ -438,187 +438,179 @@ int _XF86VidModeGetGammaRamp(
 }
 
 /*
- * GL_NV_register_combiners is a fixed-function multitexture/lighting
- * pipeline that predates shaders - NVIDIA-only, never adopted by Mesa
- * (GL_REGISTER_COMBINERS_NV isn't even a token Mesa recognizes, so the
- * game's glEnable() for it is silently rejected there). Reimplementing
- * its exact per-stage math in general is out of scope, so
- * glCombinerInputNV/OutputNV/glFinalCombinerInputNV are deliberately
- * inert below. But GL_CONSTANT_COLOR0_NV/GL_CONSTANT_COLOR1_NV turned out
- * to matter: disassembly shows the game recomputing and re-uploading them
- * per-object from real material/lighting data (not just a one-time
- * startup default), and every combiner program we decoded multiplies the
- * final texture*vertex-color result by one of these registers before
- * writing the fragment. Dropping that multiply entirely is our best
- * explanation for lost coloring (e.g. tinted text rendering white).
- *
- * We approximate it with a small trick standard OpenGL 1.x + ARB_multitexture
- * (which Mesa fully supports) can do natively: keep a 1x1 texture on a
- * spare texture unit the game itself never touches, update its color
- * every time the game sets GL_CONSTANT_COLOR{0,1}_NV, and leave that unit
- * enabled in the default GL_MODULATE environment. Because texture units
- * multiply together by default, the game's own unit(s) 0/(1) still do
- * texture*vertex-color exactly as before, and our extra unit multiplies
- * the constant color on top - reproducing the combiner's overall effect
- * without needing to emulate its internal stage graph. This is a best
- * effort we can't verify without running the game.
+ * Diagnostics: lightweight GL error checking + one-time driver info dump,
+ * so a real play session tells us what's actually happening instead of
+ * more static-analysis guesses. Resolved lazily via dlsym like the X11
+ * hooks above, since we don't link libGL directly.
  */
-#define GAELCO_CONST_COLOR0_UNIT 0x84C3 /* GL_TEXTURE3_ARB - unused by the game */
-#define GAELCO_CONST_COLOR1_UNIT 0x84C4 /* GL_TEXTURE4_ARB - unused by the game */
+typedef unsigned int (*glGetError_t)(void);
+typedef const unsigned char *(*glGetString_t)(unsigned int name);
+typedef int (*real_glXMakeCurrent_t)(Display *, XID, void *);
 
-typedef void (*glActiveTextureARB_t)(unsigned int texture);
-typedef void (*glBindTexture_t)(unsigned int target, unsigned int texture);
-typedef void (*glGenTextures_t)(int n, unsigned int *textures);
-typedef void (*glTexParameteri_t)(unsigned int target, unsigned int pname, int param);
-typedef void (*glTexImage2D_t)(unsigned int target, int level, int internalformat, int width, int height, int border, unsigned int format, unsigned int type, const void *pixels);
-typedef void (*glTexEnvi_t)(unsigned int target, unsigned int pname, int param);
-typedef void (*glEnable_t)(unsigned int cap);
-typedef void (*glGetIntegerv_t)(unsigned int pname, int *params);
+static glGetError_t real_glGetError = NULL;
+static glGetString_t real_glGetString = NULL;
+static int driver_info_logged = 0;
 
-static glActiveTextureARB_t real_glActiveTextureARB = NULL;
-static glBindTexture_t real_glBindTexture = NULL;
-static glGenTextures_t real_glGenTextures = NULL;
-static glTexParameteri_t real_glTexParameteri = NULL;
-static glTexImage2D_t real_glTexImage2D = NULL;
-static glTexEnvi_t real_glTexEnvi = NULL;
-static glEnable_t real_glEnable = NULL;
-static glGetIntegerv_t real_glGetIntegerv = NULL;
-
-static unsigned int const_color_tex[2] = {0, 0};
-static unsigned char const_color_last[2][4] = {{0, 0, 0, 0}, {0, 0, 0, 0}};
-static int const_color_has_last[2] = {0, 0};
-
-static void resolve_real_gl(void)
+static void resolve_diag_gl(void)
 {
-    if (real_glActiveTextureARB)
+    if (!real_glGetError)
     {
-        return;
+        real_glGetError = (glGetError_t)dlsym(RTLD_NEXT, "glGetError");
     }
 
-    real_glActiveTextureARB = (glActiveTextureARB_t)dlsym(RTLD_NEXT, "glActiveTextureARB");
-    real_glBindTexture = (glBindTexture_t)dlsym(RTLD_NEXT, "glBindTexture");
-    real_glGenTextures = (glGenTextures_t)dlsym(RTLD_NEXT, "glGenTextures");
-    real_glTexParameteri = (glTexParameteri_t)dlsym(RTLD_NEXT, "glTexParameteri");
-    real_glTexImage2D = (glTexImage2D_t)dlsym(RTLD_NEXT, "glTexImage2D");
-    real_glTexEnvi = (glTexEnvi_t)dlsym(RTLD_NEXT, "glTexEnvi");
-    real_glEnable = (glEnable_t)dlsym(RTLD_NEXT, "glEnable");
-    real_glGetIntegerv = (glGetIntegerv_t)dlsym(RTLD_NEXT, "glGetIntegerv");
+    if (!real_glGetString)
+    {
+        real_glGetString = (glGetString_t)dlsym(RTLD_NEXT, "glGetString");
+    }
 }
 
-static void apply_constant_color(int slot, unsigned int texture_unit, const float *params)
+static void log_gl_errors(const char *where)
 {
-    if (!real_glActiveTextureARB || !real_glBindTexture || !real_glGenTextures ||
-        !real_glTexParameteri || !real_glTexImage2D || !real_glTexEnvi ||
-        !real_glEnable || !real_glGetIntegerv)
+    resolve_diag_gl();
+
+    if (!real_glGetError)
     {
         return;
     }
 
-    unsigned char rgba[4];
+    unsigned int err;
 
-    for (int i = 0; i < 4; i++)
+    while ((err = real_glGetError()) != 0 /* GL_NO_ERROR */)
     {
-        float v = params[i];
-
-        if (v < 0.0f)
-        {
-            v = 0.0f;
-        }
-        else if (v > 1.0f)
-        {
-            v = 1.0f;
-        }
-
-        rgba[i] = (unsigned char)(v * 255.0f + 0.5f);
+        fprintf(stderr, "[graphics][GL ERROR] %s -> 0x%04x\n", where, err);
     }
-
-    if (const_color_has_last[slot] && memcmp(rgba, const_color_last[slot], sizeof(rgba)) == 0)
-    {
-        return;
-    }
-
-    memcpy(const_color_last[slot], rgba, sizeof(rgba));
-    const_color_has_last[slot] = 1;
-
-    int previous_active = 0;
-    real_glGetIntegerv(0x84E0 /* GL_ACTIVE_TEXTURE_ARB */, &previous_active);
-
-    real_glActiveTextureARB(texture_unit);
-
-    if (const_color_tex[slot] == 0)
-    {
-        real_glGenTextures(1, &const_color_tex[slot]);
-        real_glBindTexture(0x0DE1 /* GL_TEXTURE_2D */, const_color_tex[slot]);
-        real_glTexParameteri(0x0DE1, 0x2801 /* GL_TEXTURE_MIN_FILTER */, 0x2600 /* GL_NEAREST */);
-        real_glTexParameteri(0x0DE1, 0x2800 /* GL_TEXTURE_MAG_FILTER */, 0x2600 /* GL_NEAREST */);
-        real_glTexEnvi(0x2300 /* GL_TEXTURE_ENV */, 0x2200 /* GL_TEXTURE_ENV_MODE */, 0x2100 /* GL_MODULATE */);
-        real_glEnable(0x0DE1);
-    }
-    else
-    {
-        real_glBindTexture(0x0DE1, const_color_tex[slot]);
-    }
-
-    real_glTexImage2D(0x0DE1, 0, 0x1908 /* GL_RGBA */, 1, 1, 0, 0x1908 /* GL_RGBA */, 0x1401 /* GL_UNSIGNED_BYTE */, rgba);
-
-    real_glActiveTextureARB((unsigned int)previous_active);
 }
 
+/* Logs the first N calls of a given tag, then goes quiet - avoids flooding
+ * stderr from functions called per-object/per-frame while still capturing
+ * enough of the pattern to be useful. */
+static int log_budget(int *counter, int max)
+{
+    if (*counter >= max)
+    {
+        return 0;
+    }
+
+    (*counter)++;
+    return 1;
+}
+
+int glXMakeCurrent(Display *dpy, XID drawable, void *ctx)
+{
+    static real_glXMakeCurrent_t real_glXMakeCurrent = NULL;
+
+    if (!real_glXMakeCurrent)
+    {
+        real_glXMakeCurrent = (real_glXMakeCurrent_t)dlsym(RTLD_NEXT, "glXMakeCurrent");
+    }
+
+    int result = real_glXMakeCurrent ? real_glXMakeCurrent(dpy, drawable, ctx) : 0;
+
+    if (result && !driver_info_logged)
+    {
+        driver_info_logged = 1;
+        resolve_diag_gl();
+
+        if (real_glGetString)
+        {
+            const unsigned char *vendor = real_glGetString(0x1F00 /* GL_VENDOR */);
+            const unsigned char *renderer = real_glGetString(0x1F01 /* GL_RENDERER */);
+            const unsigned char *version = real_glGetString(0x1F02 /* GL_VERSION */);
+            const unsigned char *extensions = real_glGetString(0x1F03 /* GL_EXTENSIONS */);
+
+            fprintf(stderr, "[graphics][GL] vendor=%s\n", vendor ? (const char *)vendor : "(null)");
+            fprintf(stderr, "[graphics][GL] renderer=%s\n", renderer ? (const char *)renderer : "(null)");
+            fprintf(stderr, "[graphics][GL] version=%s\n", version ? (const char *)version : "(null)");
+            fprintf(stderr, "[graphics][GL] has GL_NV_register_combiners=%s\n",
+                (extensions && strstr((const char *)extensions, "GL_NV_register_combiners")) ? "yes" : "no");
+            fprintf(stderr, "[graphics][GL] has GL_ARB_multitexture=%s\n",
+                (extensions && strstr((const char *)extensions, "GL_ARB_multitexture")) ? "yes" : "no");
+            fprintf(stderr, "[graphics][GL] has GL_EXT_vertex_weighting=%s\n",
+                (extensions && strstr((const char *)extensions, "GL_EXT_vertex_weighting")) ? "yes" : "no");
+        }
+    }
+
+    log_gl_errors("glXMakeCurrent");
+
+    return result;
+}
+
+/*
+ * GL_NV_register_combiners is a fixed-function multitexture/lighting
+ * pipeline that predates shaders - NVIDIA-only, never adopted by Mesa.
+ * Reimplementing its exact per-stage math is out of scope, so these are
+ * inert: the state they'd configure is simply dropped. We tried
+ * approximating GL_CONSTANT_COLOR0/1_NV with an extra multiply texture
+ * unit, but that made rendering worse (much darker), so it's reverted -
+ * these are back to plain no-ops while we gather real data on what's
+ * actually going on via the logging above and below.
+ */
 void glCombinerParameterfvNV(unsigned int pname, const float *params)
 {
-    if (!params)
+    static int count = 0;
+
+    if (log_budget(&count, 150))
     {
-        return;
+        fprintf(stderr, "[graphics][combiner] ParameterfvNV pname=0x%04x params=(%.3f,%.3f,%.3f,%.3f)\n",
+            pname,
+            params ? params[0] : 0.0f,
+            params ? params[1] : 0.0f,
+            params ? params[2] : 0.0f,
+            params ? params[3] : 0.0f);
     }
 
-    resolve_real_gl();
-
-    if (pname == 0x852A /* GL_CONSTANT_COLOR0_NV */)
-    {
-        apply_constant_color(0, GAELCO_CONST_COLOR0_UNIT, params);
-    }
-    else if (pname == 0x852B /* GL_CONSTANT_COLOR1_NV */)
-    {
-        apply_constant_color(1, GAELCO_CONST_COLOR1_UNIT, params);
-    }
+    log_gl_errors("glCombinerParameterfvNV");
 }
 
 void glCombinerParameteriNV(unsigned int pname, int param)
 {
-    (void)pname;
-    (void)param;
+    static int count = 0;
+
+    if (log_budget(&count, 150))
+    {
+        fprintf(stderr, "[graphics][combiner] ParameteriNV pname=0x%04x param=0x%04x\n", pname, (unsigned int)param);
+    }
+
+    log_gl_errors("glCombinerParameteriNV");
 }
 
 void glCombinerInputNV(unsigned int stage, unsigned int portion, unsigned int variable, unsigned int input, unsigned int mapping, unsigned int componentUsage)
 {
-    (void)stage;
-    (void)portion;
-    (void)variable;
-    (void)input;
-    (void)mapping;
-    (void)componentUsage;
+    static int count = 0;
+
+    if (log_budget(&count, 300))
+    {
+        fprintf(stderr, "[graphics][combiner] InputNV stage=0x%04x portion=0x%04x variable=0x%04x input=0x%04x mapping=0x%04x usage=0x%04x\n",
+            stage, portion, variable, input, mapping, componentUsage);
+    }
+
+    log_gl_errors("glCombinerInputNV");
 }
 
 void glCombinerOutputNV(unsigned int stage, unsigned int portion, unsigned int abOutput, unsigned int cdOutput, unsigned int sumOutput, unsigned int scale, unsigned int bias, unsigned char abDotProduct, unsigned char cdDotProduct, unsigned char muxSum)
 {
-    (void)stage;
-    (void)portion;
-    (void)abOutput;
-    (void)cdOutput;
-    (void)sumOutput;
-    (void)scale;
-    (void)bias;
-    (void)abDotProduct;
-    (void)cdDotProduct;
-    (void)muxSum;
+    static int count = 0;
+
+    if (log_budget(&count, 150))
+    {
+        fprintf(stderr, "[graphics][combiner] OutputNV stage=0x%04x portion=0x%04x ab=0x%04x cd=0x%04x sum=0x%04x scale=0x%04x bias=0x%04x abDot=%u cdDot=%u mux=%u\n",
+            stage, portion, abOutput, cdOutput, sumOutput, scale, bias, abDotProduct, cdDotProduct, muxSum);
+    }
+
+    log_gl_errors("glCombinerOutputNV");
 }
 
 void glFinalCombinerInputNV(unsigned int variable, unsigned int input, unsigned int mapping, unsigned int componentUsage)
 {
-    (void)variable;
-    (void)input;
-    (void)mapping;
-    (void)componentUsage;
+    static int count = 0;
+
+    if (log_budget(&count, 150))
+    {
+        fprintf(stderr, "[graphics][combiner] FinalCombinerInputNV variable=0x%04x input=0x%04x mapping=0x%04x usage=0x%04x\n",
+            variable, input, mapping, componentUsage);
+    }
+
+    log_gl_errors("glFinalCombinerInputNV");
 }
 
 /*
@@ -630,15 +622,17 @@ void glFinalCombinerInputNV(unsigned int variable, unsigned int input, unsigned 
  */
 void glGenFencesNV(int n, unsigned int *fences)
 {
-    if (!fences)
+    fprintf(stderr, "[graphics][fence] glGenFencesNV n=%d\n", n);
+
+    if (fences)
     {
-        return;
+        for (int i = 0; i < n; i++)
+        {
+            fences[i] = (unsigned int)(i + 1);
+        }
     }
 
-    for (int i = 0; i < n; i++)
-    {
-        fences[i] = (unsigned int)(i + 1);
-    }
+    log_gl_errors("glGenFencesNV");
 }
 
 /*
@@ -655,40 +649,43 @@ void glGenFencesNV(int n, unsigned int *fences)
  */
 void glVertexArrayRangeNV(int length, const void *pointer)
 {
-    (void)length;
-    (void)pointer;
+    fprintf(stderr, "[graphics][var] glVertexArrayRangeNV length=%d pointer=%p\n", length, pointer);
+    log_gl_errors("glVertexArrayRangeNV");
 }
 
 void *glXAllocateMemoryNV(int size, float readfreq, float writefreq, float priority)
 {
-    (void)readfreq;
-    (void)writefreq;
-    (void)priority;
+    fprintf(stderr, "[graphics][var] glXAllocateMemoryNV size=%d readfreq=%.3f writefreq=%.3f priority=%.3f\n",
+        size, readfreq, writefreq, priority);
 
     if (size <= 0)
     {
         return NULL;
     }
 
-    return malloc((size_t)size);
+    void *ptr = malloc((size_t)size);
+
+    fprintf(stderr, "[graphics][var] glXAllocateMemoryNV -> %p\n", ptr);
+
+    return ptr;
 }
 
 void glXFreeMemoryNV(void *pointer)
 {
+    fprintf(stderr, "[graphics][var] glXFreeMemoryNV pointer=%p\n", pointer);
     free(pointer);
 }
 
 /*
  * GL_EXT_vertex_weighting: GPU-side vertex blending for skinned meshes.
- * Dropped for the same reason as the combiners above - the characters in
- * testing still animate correctly, which means this path either isn't
- * exercised on this game's models or the skinning is otherwise done
- * CPU-side already.
+ * Only one call site exists in the whole binary, which makes it an
+ * unlikely explanation for limbs missing on multiple characters - but
+ * logging every call (there should only be a handful) costs nothing and
+ * rules it in or out.
  */
 void glVertexWeightPointerEXT(int size, unsigned int type, int stride, const void *pointer)
 {
-    (void)size;
-    (void)type;
-    (void)stride;
-    (void)pointer;
+    fprintf(stderr, "[graphics][weight] glVertexWeightPointerEXT size=%d type=0x%04x stride=%d pointer=%p\n",
+        size, type, stride, pointer);
+    log_gl_errors("glVertexWeightPointerEXT");
 }
