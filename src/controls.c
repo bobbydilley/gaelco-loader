@@ -266,6 +266,24 @@ void controls_handle_event(const SDL_Event *event)
         exit(0);
     }
 
+    if (event->type == SDL_WINDOWEVENT &&
+        (event->window.event == SDL_WINDOWEVENT_SIZE_CHANGED ||
+         event->window.event == SDL_WINDOWEVENT_RESIZED))
+    {
+        graphics_sync_window_size();
+    }
+
+    /* Alt+Enter: toggle borderless fullscreen. */
+    if (event->type == SDL_KEYDOWN &&
+        event->key.keysym.sym == SDLK_RETURN &&
+        (event->key.keysym.mod & KMOD_ALT) &&
+        !event->key.repeat)
+    {
+        fprintf(stderr, "[controls] Alt+Enter -> toggle fullscreen\n");
+        graphics_toggle_fullscreen();
+        return;
+    }
+
     if (event->type == SDL_KEYDOWN &&
         event->key.keysym.sym == SDLK_t &&
         !event->key.repeat)

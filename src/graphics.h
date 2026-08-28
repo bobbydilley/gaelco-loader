@@ -9,8 +9,17 @@ extern Display *sdl_display;
 extern Window sdl_x11_window;
 extern int sdl_initialized;
 extern int creating_sdl;
+
+/* Real on-screen framebuffer size. */
 extern int window_width;
 extern int window_height;
+
+/* Fixed size the game renders at, before scaling to the window. */
+extern int render_width;
+extern int render_height;
+
+/* Non-zero when the render rectangle is being scaled/letterboxed. */
+extern int graphics_scaling_active;
 
 int graphics_init_window(int width, int height);
 void graphics_show_window(void);
@@ -18,6 +27,22 @@ void graphics_shutdown(void);
 Display *graphics_get_display(void);
 Window graphics_get_window(void);
 int graphics_is_sdl_window(Window window);
+
+/* Rebuild the scale/letterbox mapping after window_width/height,
+ * render_width/height or the config change. */
+void graphics_recompute_letterbox(void);
+
+/* Re-read the drawable size from SDL, then recompute the letterbox. */
+void graphics_sync_window_size(void);
+
+/* Toggle borderless fullscreen at runtime (bound to Alt+Enter). */
+void graphics_toggle_fullscreen(void);
+
+/* Map a point from render space to real framebuffer space. */
+void graphics_map_point(int x, int y, int *out_x, int *out_y);
+
+/* The scaled render rectangle inside the real framebuffer. */
+void graphics_content_rect(int *x, int *y, int *w, int *h);
 
 int _XF86VidModeGetGammaRamp(void *display, int screen, int size, unsigned short *red, unsigned short *green, unsigned short *blue);
 int _XF86VidModeSetGammaRamp(

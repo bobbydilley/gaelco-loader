@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "config.h"
 #include "controls.h"
 #include "graphics.h"
 #include "utils.h"
@@ -20,8 +21,171 @@ Display *sdl_display = NULL;
 Window sdl_x11_window = None;
 int sdl_initialized = 0;
 int creating_sdl = 0;
+
+/* Real on-screen framebuffer size (window client area or fullscreen). */
 int window_width = 640;
 int window_height = 480;
+
+/* Fixed resolution the game itself renders at - everything it draws is
+ * scaled from this rectangle up to window_width x window_height. */
+int render_width = 640;
+int render_height = 480;
+
+/* Placement of the scaled render rectangle inside the real framebuffer:
+ * a pixel the game draws at (x, y) lands at
+ *     (letterbox_x + x * letterbox_scale_x, letterbox_y + y * letterbox_scale_y)
+ * letterbox_{x,y} are non-zero only when keeping aspect leaves bars. */
+static int letterbox_x = 0;
+static int letterbox_y = 0;
+static int letterbox_w = 640;
+static int letterbox_h = 480;
+static double letterbox_scale_x = 1.0;
+static double letterbox_scale_y = 1.0;
+int graphics_scaling_active = 0;
+
+void graphics_recompute_letterbox(void)
+{
+    const gaelco_config_t *cfg = config_get();
+
+    if (render_width < 1)
+    {
+        render_width = 1;
+    }
+
+    if (render_height < 1)
+    {
+        render_height = 1;
+    }
+
+    if (cfg->keep_aspect)
+    {
+        double s = (double)window_width / render_width;
+        double sy = (double)window_height / render_height;
+
+        if (sy < s)
+        {
+            s = sy;
+        }
+
+        if (cfg->integer_scale && s >= 1.0)
+        {
+            s = (double)(int)s;
+        }
+
+        if (s <= 0.0)
+        {
+            s = 1.0;
+        }
+
+        letterbox_scale_x = s;
+        letterbox_scale_y = s;
+        letterbox_w = (int)(render_width * s + 0.5);
+        letterbox_h = (int)(render_height * s + 0.5);
+    }
+    else
+    {
+        letterbox_scale_x = (double)window_width / render_width;
+        letterbox_scale_y = (double)window_height / render_height;
+        letterbox_w = window_width;
+        letterbox_h = window_height;
+    }
+
+    letterbox_x = (window_width - letterbox_w) / 2;
+    letterbox_y = (window_height - letterbox_h) / 2;
+
+    if (letterbox_x < 0)
+    {
+        letterbox_x = 0;
+    }
+
+    if (letterbox_y < 0)
+    {
+        letterbox_y = 0;
+    }
+
+    graphics_scaling_active =
+        letterbox_x != 0 || letterbox_y != 0 ||
+        letterbox_w != render_width || letterbox_h != render_height;
+
+    fprintf(stderr,
+        "[graphics] scale: window %dx%d, render %dx%d -> rect %d,%d %dx%d (x%.3f%s)\n",
+        window_width, window_height, render_width, render_height,
+        letterbox_x, letterbox_y, letterbox_w, letterbox_h, letterbox_scale_x,
+        graphics_scaling_active ? "" : ", 1:1");
+}
+
+void graphics_map_point(int x, int y, int *out_x, int *out_y)
+{
+    if (out_x)
+    {
+        *out_x = letterbox_x + (int)(x * letterbox_scale_x + 0.5);
+    }
+
+    if (out_y)
+    {
+        *out_y = letterbox_y + (int)(y * letterbox_scale_y + 0.5);
+    }
+}
+
+void graphics_content_rect(int *x, int *y, int *w, int *h)
+{
+    if (x) *x = letterbox_x;
+    if (y) *y = letterbox_y;
+    if (w) *w = letterbox_w;
+    if (h) *h = letterbox_h;
+}
+
+/* Re-read the real drawable size from SDL and rebuild the letterbox. */
+void graphics_sync_window_size(void)
+{
+    if (!sdl_window)
+    {
+        return;
+    }
+
+    int w = 0;
+    int h = 0;
+
+    SDL_GL_GetDrawableSize(sdl_window, &w, &h);
+
+    if (w <= 0 || h <= 0)
+    {
+        SDL_GetWindowSize(sdl_window, &w, &h);
+    }
+
+    if (w > 0 && h > 0)
+    {
+        window_width = w;
+        window_height = h;
+    }
+
+    graphics_recompute_letterbox();
+}
+
+void graphics_toggle_fullscreen(void)
+{
+    if (!sdl_window)
+    {
+        return;
+    }
+
+    Uint32 flags = SDL_GetWindowFlags(sdl_window);
+    int now_fs = (flags & SDL_WINDOW_FULLSCREEN_DESKTOP) != 0;
+
+    SDL_SetWindowFullscreen(sdl_window,
+        now_fs ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP);
+    SDL_ShowCursor(now_fs ? SDL_ENABLE : SDL_DISABLE);
+
+    if (now_fs)
+    {
+        const gaelco_config_t *cfg = config_get();
+        SDL_SetWindowSize(sdl_window, cfg->width, cfg->height);
+        SDL_SetWindowPosition(sdl_window,
+            SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
+    }
+
+    graphics_sync_window_size();
+}
 
 int graphics_init_window(int width, int height)
 {
@@ -39,19 +203,49 @@ int graphics_init_window(int width, int height)
 
     creating_sdl = 1;
 
+    config_load();
+
+    const gaelco_config_t *cfg = config_get();
+
+    /* The game passes the size it wants to render at (640x480 for Tokyo
+     * Cop). Keep that as the internal render size; the real window size
+     * comes from gaelco.ini instead. */
     if (width > 0)
     {
-        window_width = width;
+        render_width = width;
+    }
+    else
+    {
+        render_width = cfg->render_width;
     }
 
     if (height > 0)
     {
-        window_height = height;
+        render_height = height;
+    }
+    else
+    {
+        render_height = cfg->render_height;
     }
 
-    debug("[graphics] creating SDL window %dx%d\n",
-        window_width,
-        window_height);
+    Uint32 window_flags = SDL_WINDOW_SHOWN | SDL_WINDOW_OPENGL;
+
+    if (cfg->fullscreen)
+    {
+        window_flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
+        window_width = cfg->width;
+        window_height = cfg->height;
+    }
+    else
+    {
+        window_width = cfg->width;
+        window_height = cfg->height;
+    }
+
+    debug("[graphics] creating SDL window %dx%d%s (render %dx%d)\n",
+        window_width, window_height,
+        cfg->fullscreen ? " fullscreen" : "",
+        render_width, render_height);
 
     SDL_setenv("SDL_VIDEODRIVER", "x11", 1);
 
@@ -74,7 +268,7 @@ int graphics_init_window(int width, int height)
         SDL_WINDOWPOS_CENTERED,
         window_width,
         window_height,
-        SDL_WINDOW_SHOWN | SDL_WINDOW_OPENGL);
+        window_flags);
 
     if (!sdl_window)
     {
@@ -83,6 +277,13 @@ int graphics_init_window(int width, int height)
         creating_sdl = 0;
         return 0;
     }
+
+    if (cfg->fullscreen)
+    {
+        SDL_ShowCursor(SDL_DISABLE);
+    }
+
+    graphics_sync_window_size();
 
     memset(&wm, 0, sizeof(wm));
     SDL_VERSION(&wm.version);
@@ -240,17 +441,9 @@ Window XCreateWindow(Display *display, Window parent, int x, int y, unsigned int
 
     if (!sdl_window)
     {
-        if (width > 0)
-        {
-            window_width = (int)width;
-        }
-
-        if (height > 0)
-        {
-            window_height = (int)height;
-        }
-
-        if (!graphics_init_window(window_width, window_height))
+        /* Pass the game's requested size through as the *render* size;
+         * graphics_init_window sizes the real window from gaelco.ini. */
+        if (!graphics_init_window((int)width, (int)height))
         {
             debug("[graphics] XCreateWindow: SDL window creation failed\n");
             return None;
@@ -282,11 +475,14 @@ Window XCreateWindow(Display *display, Window parent, int x, int y, unsigned int
         valueMask,
         (unsigned long)sdl_x11_window);
 
-    if (width > 0 && height > 0 && ((int)width != window_width || (int)height != window_height))
+    /* The game wants a 640x480 drawable; that's now the internal render
+     * size, scaled to the real window. Don't resize the real window. */
+    if (width > 0 && height > 0 &&
+        ((int)width != render_width || (int)height != render_height))
     {
-        window_width = (int)width;
-        window_height = (int)height;
-        SDL_SetWindowSize(sdl_window, window_width, window_height);
+        render_width = (int)width;
+        render_height = (int)height;
+        graphics_recompute_letterbox();
     }
 
     return sdl_x11_window;
@@ -960,17 +1156,84 @@ void glColorPointer(int size, unsigned int type, int stride, const void *pointer
     if (real_glColorPointer) real_glColorPointer(size, type, stride, pointer);
 }
 
-/* Diagnostic-only (GAELCO_CMB_LOG=1): background/blit path. */
 typedef void (*gl_clearcolor_t)(float, float, float, float);
 typedef void (*gl_drawpixels_t)(int, int, unsigned int, unsigned int, const void *);
+typedef void (*gl_clear_t)(unsigned int);
+typedef void (*gl_scissor_t)(int, int, int, int);
+typedef void (*gl_cap_t)(unsigned int);
 static gl_clearcolor_t real_glClearColor_d = NULL;
 static gl_drawpixels_t real_glDrawPixels_d = NULL;
+static gl_clear_t real_glClear_s = NULL;
+static gl_scissor_t real_glScissor_s = NULL;
+static gl_cap_t real_glEnable_s = NULL;
+static gl_cap_t real_glDisable_s = NULL;
+
+/* Resolve the raw GL entry points the scaling path needs. glScissor is
+ * not one of the game's imports, so RTLD_NEXT lands straight on the
+ * driver; glEnable/glDisable are interposed by us, so resolve them by
+ * name too rather than recursing through our own wrappers. */
+static void resolve_scale_gl(void)
+{
+    if (real_glClear_s)
+    {
+        return;
+    }
+
+    real_glClear_s = (gl_clear_t)dlsym(RTLD_NEXT, "glClear");
+    real_glScissor_s = (gl_scissor_t)dlsym(RTLD_NEXT, "glScissor");
+    real_glEnable_s = (gl_cap_t)dlsym(RTLD_NEXT, "glEnable");
+    real_glDisable_s = (gl_cap_t)dlsym(RTLD_NEXT, "glDisable");
+    if (!real_glClearColor_d)
+        real_glClearColor_d = (gl_clearcolor_t)dlsym(RTLD_NEXT, "glClearColor");
+}
+
+/* Last clear colour the game asked for, so we can restore it after
+ * painting the letterbox bars black. */
+static float game_clear_color[4] = {0.0f, 0.0f, 0.0f, 1.0f};
 
 void glClearColor(float r, float g, float b, float a)
 {
     if (!real_glClearColor_d) real_glClearColor_d = (gl_clearcolor_t)dlsym(RTLD_NEXT, "glClearColor");
     CMBLOG("[cmb] glClearColor(%.3f %.3f %.3f %.3f)\n", r, g, b, a);
+    game_clear_color[0] = r;
+    game_clear_color[1] = g;
+    game_clear_color[2] = b;
+    game_clear_color[3] = a;
     if (real_glClearColor_d) real_glClearColor_d(r, g, b, a);
+}
+
+/*
+ * When the render rectangle is scaled/letterboxed inside a bigger window,
+ * every glViewport the game sets is remapped into that rectangle and a
+ * matching glScissor is left enabled, so all of the game's drawing -
+ * including its own glClear - stays inside the scaled image. Here we first
+ * wipe the whole framebuffer black (bars included), ignoring the game's
+ * clear colour, then hand its clear straight through under the scissor.
+ */
+void glClear(unsigned int mask)
+{
+    resolve_scale_gl();
+
+    if (graphics_scaling_active && real_glClear_s && real_glScissor_s &&
+        real_glClearColor_d && real_glEnable_s && real_glDisable_s)
+    {
+        int cx, cy, cw, ch;
+        graphics_content_rect(&cx, &cy, &cw, &ch);
+
+        real_glDisable_s(0x0C11 /* GL_SCISSOR_TEST */);
+        real_glClearColor_d(0.0f, 0.0f, 0.0f, 1.0f);
+        real_glClear_s(0x00004000 /* GL_COLOR_BUFFER_BIT */ | 0x00000100 /* GL_DEPTH_BUFFER_BIT */);
+        real_glClearColor_d(game_clear_color[0], game_clear_color[1],
+            game_clear_color[2], game_clear_color[3]);
+
+        real_glScissor_s(cx, cy, cw, ch);
+        real_glEnable_s(0x0C11 /* GL_SCISSOR_TEST */);
+    }
+
+    if (real_glClear_s)
+    {
+        real_glClear_s(mask);
+    }
 }
 
 void glDrawPixels(int width, int height, unsigned int format, unsigned int type, const void *pixels)
@@ -1654,11 +1917,12 @@ void glDisable(unsigned int cap)
 }
 
 /*
- * Diagnostic for the blurry-text report: if the game's glViewport size
- * doesn't match the SDL window's actual drawable pixel size, the GPU
- * scales the rendered image to fit, which blurs sharp edges like font
- * glyphs far more visibly than it blurs 3D geometry/textures - a classic
- * cause of "text looks soft but everything else looks okay-ish".
+ * The game renders at a fixed size (render_width x render_height) and sets
+ * its viewport in that space. When the real window is bigger (or
+ * fullscreen), remap every viewport the game requests into the scaled,
+ * aspect-preserved rectangle inside the window, and keep a scissor of the
+ * same rectangle enabled so the game's own glClear/draws never spill into
+ * the letterbox bars (which glClear() above paints black each frame).
  */
 typedef void (*glViewport_t)(int x, int y, int width, int height);
 static glViewport_t real_glViewport = NULL;
@@ -1670,6 +1934,8 @@ void glViewport(int x, int y, int width, int height)
     {
         real_glViewport = (glViewport_t)dlsym(RTLD_NEXT, "glViewport");
     }
+
+    resolve_scale_gl();
 
     if (!viewport_logged)
     {
@@ -1683,8 +1949,28 @@ void glViewport(int x, int y, int width, int height)
             SDL_GL_GetDrawableSize(sdl_window, &drawable_w, &drawable_h);
         }
 
-        fprintf(stderr, "[graphics][viewport] glViewport(%d,%d,%d,%d) vs SDL window %dx%d, GL drawable %dx%d\n",
-            x, y, width, height, window_width, window_height, drawable_w, drawable_h);
+        fprintf(stderr,
+            "[graphics][viewport] game glViewport(%d,%d,%d,%d); window %dx%d, GL drawable %dx%d, scaling=%d\n",
+            x, y, width, height, window_width, window_height,
+            drawable_w, drawable_h, graphics_scaling_active);
+    }
+
+    if (graphics_scaling_active && real_glViewport)
+    {
+        int rx, ry, rx2, ry2;
+        graphics_map_point(x, y, &rx, &ry);
+        graphics_map_point(x + width, y + height, &rx2, &ry2);
+        real_glViewport(rx, ry, rx2 - rx, ry2 - ry);
+
+        if (real_glScissor_s && real_glEnable_s)
+        {
+            int cx, cy, cw, ch;
+            graphics_content_rect(&cx, &cy, &cw, &ch);
+            real_glScissor_s(cx, cy, cw, ch);
+            real_glEnable_s(0x0C11 /* GL_SCISSOR_TEST */);
+        }
+
+        return;
     }
 
     if (real_glViewport)

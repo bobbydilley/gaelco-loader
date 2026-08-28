@@ -41,6 +41,7 @@ endif()
 
 add_library(gaelco-preload SHARED
     src/preload.c
+    src/config.c
     src/controls.c
     src/gaelco.c
     src/graphics.c
