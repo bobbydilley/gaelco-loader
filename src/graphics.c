@@ -667,10 +667,19 @@ static glShadeModel_diag_t real_glShadeModel_diag = NULL;
 static glActiveTextureARB_diag_t real_glActiveTextureARB_diag = NULL;
 static glClientActiveTextureARB_diag_t real_glClientActiveTextureARB_diag = NULL;
 
+/* Opt-in combiner / 2D-UI call tracing: run with GAELCO_CMB_LOG=1. */
+static int cmb_log_enabled = -1;
+static int cmb_log_budget = 20000;
+#define CMBLOG(...) do { \
+    if (cmb_log_enabled < 0) cmb_log_enabled = getenv("GAELCO_CMB_LOG") ? 1 : 0; \
+    if (cmb_log_enabled && cmb_log_budget > 0) { cmb_log_budget--; fprintf(stderr, __VA_ARGS__); } \
+} while (0)
+
 void glTexEnvi(unsigned int target, unsigned int pname, int param)
 {
     if (!real_glTexEnvi_diag) real_glTexEnvi_diag = (glTexEnvi_diag_t)dlsym(RTLD_NEXT, "glTexEnvi");
     if (real_glTexEnvi_diag) real_glTexEnvi_diag(target, pname, param);
+    CMBLOG("[cmb] glTexEnvi(target=0x%04x pname=0x%04x param=0x%04x)\n", target, pname, (unsigned int)param);
     char tag[80];
     snprintf(tag, sizeof(tag), "glTexEnvi(target=0x%04x, pname=0x%04x, param=0x%04x)", target, pname, (unsigned int)param);
     log_gl_errors(tag);
@@ -791,82 +800,184 @@ void glClientActiveTextureARB(unsigned int texture)
 }
 
 /*
- * GL_NV_register_combiners is a fixed-function multitexture/lighting
- * pipeline that predates shaders - NVIDIA-only, never adopted by Mesa.
- * Reimplementing its exact per-stage math is out of scope, so these are
- * plain no-ops. We tried two different approximations of
- * GL_CONSTANT_COLOR0/1_NV using an extra multiply texture unit - first
- * unconditionally (made everything darker), then scoped to only the
- * combiner programs that actually reference it (introduced a blotchy red
- * pattern on character faces) - both reverted. Character skin tone
- * renders correctly without any of this, confirming the base
- * texture*vertex-color modulation Mesa already does by default is enough
- * for 3D geometry - it's specifically 2D UI (e.g. "INSERT COIN") that
- * loses its tint, which suggests that geometry has no vertex color array
- * of its own and relies entirely on GL_CONSTANT_COLOR0_NV for color.
- *
- * Third attempt, much narrower: just forward GL_CONSTANT_COLOR0_NV into a
- * plain glColor4f() call - no texture units, no multitexture state at
- * all. Anything using a per-vertex color array (which the correctly-
- * rendering 3D characters clearly do) ignores glColor4f entirely, so this
- * shouldn't be able to reintroduce the texture-unit regressions; anything
- * that doesn't (2D UI, apparently) picks it up as intended.
+ * GL_NV_register_combiners is an NVIDIA-only fixed-function
+ * multitexture/lighting pipeline Mesa never implemented. The full
+ * per-stage machine is out of scope, but Tokyo Cop only ever programs one
+ * effective pipeline, and the single term Mesa's default path is missing
+ * is the per-draw uniform CONSTANT_COLOR0_NV - see the block just above
+ * glCombinerParameterfvNV() for the captured program and how we fold that
+ * one term back in. Everything else here stays a no-op.
  */
-typedef void (*glColor4f_t)(float r, float g, float b, float a);
-static glColor4f_t real_glColor4f = NULL;
+
+/*
+ * ===================== GL_NV_register_combiners: CONSTANT_COLOR0_NV =====================
+ *
+ * Live capture of Tokyo Cop's combiner programs (enable the [cmb] logging
+ * below with GAELCO_CMB_LOG=1) shows every draw resolves to the same
+ * effective pipeline:
+ *
+ *   general combiner 0: SPARE0     = PRIMARY      * TEXTURE0
+ *   general combiner 1: SPARE0    *= CONSTANT_COLOR0_NV
+ *   final combiner:     out.rgb    = fog-blend(SPARE0.rgb, fogColor)
+ *                       out.a      = SPARE0.a
+ *
+ * i.e.  final = PRIMARY * TEXTURE0 * CONSTANT_COLOR0   (rgb and alpha),
+ * then ordinary fixed-function fog.
+ *
+ * Mesa's fixed-function path already produces PRIMARY * TEXTURE0 (the game
+ * binds a per-vertex GL_COLOR_ARRAY for PRIMARY and uses GL_MODULATE on
+ * texture unit 0), and fog still works normally. The only missing term is
+ * the per-draw uniform CONSTANT_COLOR0_NV, which the game animates for the
+ * 2D UI:
+ *   - solid tints, e.g. (1,0,0,1) for the red "SELECT GAME MODE" banner
+ *     and the red/orange menu headings (previously rendered plain white);
+ *   - alpha fades, e.g. (1,1,1,0.68) -> (1,1,1,0.008) for the zooming
+ *     agent-name text that is supposed to enlarge *and fade out*
+ *     (previously it enlarged but never faded).
+ *
+ * The previous approach forwarded CONSTANT_COLOR0_NV to glColor4f(), which
+ * does nothing here because the enabled GL_COLOR_ARRAY overrides glColor*.
+ * Instead we multiply it in on a spare fixed-function texture unit via
+ * GL_ARB_texture_env_combine:  unitN = GL_PREVIOUS * GL_CONSTANT  with
+ * GL_TEXTURE_ENV_COLOR = CONSTANT_COLOR0_NV. That composes correctly with
+ * the vertex-colour array and with unit 0, and reproduces the combiner
+ * math exactly. It is skipped whenever CONSTANT_COLOR0_NV is ~white (the
+ * overwhelmingly common case), so 3D geometry is left byte-for-byte as it
+ * was, and skipped when it is exactly zero (the game's between-objects
+ * reset value) so a stale reset can't paint a black box.
+ */
+static float gaelco_const0[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+static int gaelco_const0_active = 0;   /* CONSTANT_COLOR0_NV is neither ~white nor zero */
+
+static int const0_unit = -1;           /* GL_TEXTUREi index; -1 unresolved, -2 unavailable */
+static unsigned int const0_white_tex = 0;
+
+typedef void (*gl_bindtex_t)(unsigned int, unsigned int);
+typedef void (*gl_gentex_t)(int, unsigned int *);
+typedef void (*gl_texparami_t)(unsigned int, unsigned int, int);
+typedef void (*gl_texenvfv_t)(unsigned int, unsigned int, const float *);
+typedef void (*gl_activetex_t)(unsigned int);
+
+static gl_bindtex_t real_glBindTexture_c0 = NULL;
+static gl_gentex_t real_glGenTextures_c0 = NULL;
+static gl_texparami_t real_glTexParameteri_c0 = NULL;
+static gl_texenvfv_t real_glTexEnvfv_c0 = NULL;
+static gl_activetex_t real_glActiveTextureARB_c0 = NULL;
+
+/* resolve_const0_gl / const0_ensure_unit / const0_begin / const0_end are
+ * defined further down, after resolve_weighting_gl() and the weighting GL
+ * entry-point pointers they share. */
+static int const0_begin(void);
+static void const0_end(void);
 
 void glCombinerParameterfvNV(unsigned int pname, const float *params)
 {
+    if (params)
+    {
+        CMBLOG("[cmb] ParameterfvNV pname=0x%04x -> %.3f %.3f %.3f %.3f\n",
+            pname, params[0], params[1], params[2], params[3]);
+    }
+
     if (pname == 0x852A /* GL_CONSTANT_COLOR0_NV */ && params)
     {
-        if (!real_glColor4f)
-        {
-            real_glColor4f = (glColor4f_t)dlsym(RTLD_NEXT, "glColor4f");
-        }
+        gaelco_const0[0] = params[0];
+        gaelco_const0[1] = params[1];
+        gaelco_const0[2] = params[2];
+        gaelco_const0[3] = params[3];
 
-        if (real_glColor4f)
-        {
-            real_glColor4f(params[0], params[1], params[2], params[3]);
-        }
+        int is_white = params[0] >= 0.996f && params[1] >= 0.996f &&
+                       params[2] >= 0.996f && params[3] >= 0.996f;
+        int is_zero = params[0] <= 0.0f && params[1] <= 0.0f &&
+                      params[2] <= 0.0f && params[3] <= 0.0f;
+
+        gaelco_const0_active = !is_white && !is_zero;
     }
 }
 
 void glCombinerParameteriNV(unsigned int pname, int param)
 {
-    (void)pname;
-    (void)param;
+    CMBLOG("[cmb] ParameteriNV pname=0x%04x param=%d\n", pname, param);
 }
 
 void glCombinerInputNV(unsigned int stage, unsigned int portion, unsigned int variable, unsigned int input, unsigned int mapping, unsigned int componentUsage)
 {
-    (void)stage;
-    (void)portion;
-    (void)variable;
-    (void)input;
-    (void)mapping;
-    (void)componentUsage;
+    CMBLOG("[cmb] InputNV stage=%u portion=0x%04x var=0x%04x input=0x%04x map=0x%04x cu=0x%04x\n",
+        stage - 0x8550, portion, variable, input, mapping, componentUsage);
 }
 
 void glCombinerOutputNV(unsigned int stage, unsigned int portion, unsigned int abOutput, unsigned int cdOutput, unsigned int sumOutput, unsigned int scale, unsigned int bias, unsigned char abDotProduct, unsigned char cdDotProduct, unsigned char muxSum)
 {
-    (void)stage;
-    (void)portion;
-    (void)abOutput;
-    (void)cdOutput;
-    (void)sumOutput;
-    (void)scale;
-    (void)bias;
-    (void)abDotProduct;
-    (void)cdDotProduct;
-    (void)muxSum;
+    CMBLOG("[cmb] OutputNV stage=%u portion=0x%04x ab=0x%04x cd=0x%04x sum=0x%04x scale=0x%04x bias=0x%04x abDot=%d cdDot=%d mux=%d\n",
+        stage - 0x8550, portion, abOutput, cdOutput, sumOutput, scale, bias, abDotProduct, cdDotProduct, muxSum);
 }
 
 void glFinalCombinerInputNV(unsigned int variable, unsigned int input, unsigned int mapping, unsigned int componentUsage)
 {
-    (void)variable;
-    (void)input;
-    (void)mapping;
-    (void)componentUsage;
+    CMBLOG("[cmb] FinalInputNV var=0x%04x input=0x%04x map=0x%04x cu=0x%04x\n",
+        variable, input, mapping, componentUsage);
+}
+
+/*
+ * Client-state / array hooks the game imports but graphics.c never wrapped.
+ * glEnableClientState/glDisableClientState here also filter the three
+ * NV/EXT array tokens Mesa rejects (GL_VERTEX_WEIGHT_ARRAY_EXT and the two
+ * GLX_NV_vertex_array_range client-state tokens); before this, each was
+ * raising GL_INVALID_ENUM on every single frame.
+ */
+typedef void (*gl_uint_t)(unsigned int);
+typedef void (*glColorPointer_t)(int, unsigned int, int, const void *);
+static gl_uint_t real_glEnableClientState = NULL;
+static gl_uint_t real_glDisableClientState = NULL;
+static glColorPointer_t real_glColorPointer = NULL;
+
+static int const0_array_token_unsupported(unsigned int cap)
+{
+    return cap == 0x850C /* GL_VERTEX_WEIGHT_ARRAY_EXT */ ||
+           cap == 0x851D /* GL_VERTEX_ARRAY_RANGE_NV */ ||
+           cap == 0x8533 /* GL_VERTEX_ARRAY_RANGE_WITHOUT_FLUSH_NV */;
+}
+
+void glEnableClientState(unsigned int cap)
+{
+    if (!real_glEnableClientState) real_glEnableClientState = (gl_uint_t)dlsym(RTLD_NEXT, "glEnableClientState");
+    CMBLOG("[cmb] glEnableClientState(0x%04x)\n", cap);
+    if (const0_array_token_unsupported(cap)) return;
+    if (real_glEnableClientState) real_glEnableClientState(cap);
+}
+
+void glDisableClientState(unsigned int cap)
+{
+    if (!real_glDisableClientState) real_glDisableClientState = (gl_uint_t)dlsym(RTLD_NEXT, "glDisableClientState");
+    CMBLOG("[cmb] glDisableClientState(0x%04x)\n", cap);
+    if (const0_array_token_unsupported(cap)) return;
+    if (real_glDisableClientState) real_glDisableClientState(cap);
+}
+
+void glColorPointer(int size, unsigned int type, int stride, const void *pointer)
+{
+    if (!real_glColorPointer) real_glColorPointer = (glColorPointer_t)dlsym(RTLD_NEXT, "glColorPointer");
+    CMBLOG("[cmb] glColorPointer size=%d type=0x%04x stride=%d ptr=%p\n", size, type, stride, pointer);
+    if (real_glColorPointer) real_glColorPointer(size, type, stride, pointer);
+}
+
+/* Diagnostic-only (GAELCO_CMB_LOG=1): background/blit path. */
+typedef void (*gl_clearcolor_t)(float, float, float, float);
+typedef void (*gl_drawpixels_t)(int, int, unsigned int, unsigned int, const void *);
+static gl_clearcolor_t real_glClearColor_d = NULL;
+static gl_drawpixels_t real_glDrawPixels_d = NULL;
+
+void glClearColor(float r, float g, float b, float a)
+{
+    if (!real_glClearColor_d) real_glClearColor_d = (gl_clearcolor_t)dlsym(RTLD_NEXT, "glClearColor");
+    CMBLOG("[cmb] glClearColor(%.3f %.3f %.3f %.3f)\n", r, g, b, a);
+    if (real_glClearColor_d) real_glClearColor_d(r, g, b, a);
+}
+
+void glDrawPixels(int width, int height, unsigned int format, unsigned int type, const void *pixels)
+{
+    if (!real_glDrawPixels_d) real_glDrawPixels_d = (gl_drawpixels_t)dlsym(RTLD_NEXT, "glDrawPixels");
+    CMBLOG("[cmb] glDrawPixels %dx%d format=0x%04x type=0x%04x\n", width, height, format, type);
+    if (real_glDrawPixels_d) real_glDrawPixels_d(width, height, format, type, pixels);
 }
 
 /*
@@ -1137,6 +1248,136 @@ static void resolve_weighting_gl(void)
     real_glGetIntegerv = (glGetIntegerv_t)dlsym(RTLD_NEXT, "glGetIntegerv");
     real_glDisable = (glDisable_t)dlsym(RTLD_NEXT, "glDisable");
     gaelco_real_glEnable = (void (*)(unsigned int))dlsym(RTLD_NEXT, "glEnable");
+}
+
+/* ---- GL_NV_register_combiners CONSTANT_COLOR0_NV emulation (see the big
+ *      comment next to glCombinerParameterfvNV for the rationale) ---- */
+
+static void resolve_const0_gl(void)
+{
+    if (real_glBindTexture_c0)
+    {
+        return;
+    }
+
+    real_glBindTexture_c0 = (gl_bindtex_t)dlsym(RTLD_NEXT, "glBindTexture");
+    real_glGenTextures_c0 = (gl_gentex_t)dlsym(RTLD_NEXT, "glGenTextures");
+    real_glTexParameteri_c0 = (gl_texparami_t)dlsym(RTLD_NEXT, "glTexParameteri");
+    real_glTexEnvfv_c0 = (gl_texenvfv_t)dlsym(RTLD_NEXT, "glTexEnvfv");
+    real_glActiveTextureARB_c0 = (gl_activetex_t)dlsym(RTLD_NEXT, "glActiveTextureARB");
+
+    if (!real_glTexImage2D_diag)
+        real_glTexImage2D_diag = (glTexImage2D_diag_t)dlsym(RTLD_NEXT, "glTexImage2D");
+    if (!real_glGetIntegerv)
+        real_glGetIntegerv = (glGetIntegerv_t)dlsym(RTLD_NEXT, "glGetIntegerv");
+}
+
+/* Resolve which spare fixed-function texture unit to use, and build the
+ * 1x1 white texture that unit needs bound to run its combiner. */
+static void const0_ensure_unit(void)
+{
+    if (const0_unit != -1)
+    {
+        return;
+    }
+
+    resolve_weighting_gl();
+    resolve_const0_gl();
+
+    if (!real_glGetIntegerv || !real_glBindTexture_c0 || !real_glGenTextures_c0 ||
+        !real_glTexImage2D_diag || !real_glTexParameteri_c0 || !real_glTexEnvi_diag ||
+        !real_glTexEnvfv_c0 || !real_glActiveTextureARB_c0 || !gaelco_real_glEnable || !real_glDisable)
+    {
+        const0_unit = -2;
+        return;
+    }
+
+    int maxu = 0;
+    real_glGetIntegerv(0x84E2 /* GL_MAX_TEXTURE_UNITS */, &maxu);
+
+    if (maxu < 2)
+    {
+        const0_unit = -2;
+        return;
+    }
+
+    int unit = maxu - 1; /* top unit; the game only ever uses 0 (and rarely 1) */
+
+    int saved = 0x84C0;
+    real_glGetIntegerv(0x84E0 /* GL_ACTIVE_TEXTURE */, &saved);
+
+    real_glActiveTextureARB_c0((unsigned int)(0x84C0 + unit));
+
+    real_glGenTextures_c0(1, &const0_white_tex);
+    real_glBindTexture_c0(0x0DE1 /* GL_TEXTURE_2D */, const0_white_tex);
+
+    unsigned char px[4] = {255, 255, 255, 255};
+    real_glTexImage2D_diag(0x0DE1, 0, 0x8058 /* GL_RGBA8 */, 1, 1, 0,
+        0x1908 /* GL_RGBA */, 0x1401 /* GL_UNSIGNED_BYTE */, px);
+    real_glTexParameteri_c0(0x0DE1, 0x2801 /* MIN_FILTER */, 0x2600 /* GL_NEAREST */);
+    real_glTexParameteri_c0(0x0DE1, 0x2800 /* MAG_FILTER */, 0x2600 /* GL_NEAREST */);
+
+    real_glActiveTextureARB_c0((unsigned int)saved);
+
+    const0_unit = unit;
+    fprintf(stderr, "[graphics][const0] using spare texture unit %d (GL_MAX_TEXTURE_UNITS=%d)\n", unit, maxu);
+}
+
+/* Enable "* CONSTANT_COLOR0_NV" on the spare unit for the next draw. */
+static int const0_begin(void)
+{
+    if (!gaelco_const0_active)
+    {
+        return 0;
+    }
+
+    const0_ensure_unit();
+
+    if (const0_unit < 0)
+    {
+        return 0;
+    }
+
+    int saved = 0x84C0;
+    real_glGetIntegerv(0x84E0 /* GL_ACTIVE_TEXTURE */, &saved);
+
+    real_glActiveTextureARB_c0((unsigned int)(0x84C0 + const0_unit));
+    real_glBindTexture_c0(0x0DE1, const0_white_tex);
+    gaelco_real_glEnable(0x0DE1 /* GL_TEXTURE_2D */);
+
+    real_glTexEnvi_diag(0x2300 /* GL_TEXTURE_ENV */, 0x2200 /* ENV_MODE */, 0x8570 /* GL_COMBINE */);
+
+    real_glTexEnvi_diag(0x2300, 0x8571 /* COMBINE_RGB */, 0x2100 /* GL_MODULATE */);
+    real_glTexEnvi_diag(0x2300, 0x8580 /* SOURCE0_RGB */, 0x8578 /* GL_PREVIOUS */);
+    real_glTexEnvi_diag(0x2300, 0x8590 /* OPERAND0_RGB */, 0x0300 /* GL_SRC_COLOR */);
+    real_glTexEnvi_diag(0x2300, 0x8581 /* SOURCE1_RGB */, 0x8576 /* GL_CONSTANT */);
+    real_glTexEnvi_diag(0x2300, 0x8591 /* OPERAND1_RGB */, 0x0300 /* GL_SRC_COLOR */);
+
+    real_glTexEnvi_diag(0x2300, 0x8572 /* COMBINE_ALPHA */, 0x2100 /* GL_MODULATE */);
+    real_glTexEnvi_diag(0x2300, 0x8588 /* SOURCE0_ALPHA */, 0x8578 /* GL_PREVIOUS */);
+    real_glTexEnvi_diag(0x2300, 0x8598 /* OPERAND0_ALPHA */, 0x0302 /* GL_SRC_ALPHA */);
+    real_glTexEnvi_diag(0x2300, 0x8589 /* SOURCE1_ALPHA */, 0x8576 /* GL_CONSTANT */);
+    real_glTexEnvi_diag(0x2300, 0x8599 /* OPERAND1_ALPHA */, 0x0302 /* GL_SRC_ALPHA */);
+
+    real_glTexEnvfv_c0(0x2300, 0x2201 /* GL_TEXTURE_ENV_COLOR */, gaelco_const0);
+
+    real_glActiveTextureARB_c0((unsigned int)saved);
+    return 1;
+}
+
+static void const0_end(void)
+{
+    if (const0_unit < 0)
+    {
+        return;
+    }
+
+    int saved = 0x84C0;
+    real_glGetIntegerv(0x84E0 /* GL_ACTIVE_TEXTURE */, &saved);
+
+    real_glActiveTextureARB_c0((unsigned int)(0x84C0 + const0_unit));
+    real_glDisable(0x0DE1 /* GL_TEXTURE_2D */);
+    real_glActiveTextureARB_c0((unsigned int)saved);
 }
 
 void glMatrixMode(unsigned int mode)
@@ -1707,7 +1948,13 @@ void glDrawElements(unsigned int mode, int count, unsigned int type, const void 
 
     if (!weighted_draw)
     {
+        /* 2D UI / unweighted geometry: fold in CONSTANT_COLOR0_NV (menu
+         * tints and the agent-name fade) via the spare texture unit. */
+        CMBLOG("[cmb] draw(elements) count=%d const0_active=%d const0=%.2f %.2f %.2f %.2f\n",
+            count, gaelco_const0_active, gaelco_const0[0], gaelco_const0[1], gaelco_const0[2], gaelco_const0[3]);
+        int c0 = const0_begin();
         real_glDrawElements(mode, count, type, indices);
+        if (c0) const0_end();
         return;
     }
 
