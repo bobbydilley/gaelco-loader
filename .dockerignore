@@ -1,0 +1,9 @@
+.git
+build/
+dist/
+*.AppImage
+Gaelco.AppDir/
+*.swp
+*.o
+*.d
+.gaelco-debug.log*

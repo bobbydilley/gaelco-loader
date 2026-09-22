@@ -1,0 +1,77 @@
+name: Build AppImage
+
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: appimage-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build AppImage (Docker)
+        run: |
+          docker build --target build -t gaelco-loader-build .
+          cid="$(docker create gaelco-loader-build)"
+          mkdir -p out
+          docker cp "$cid:/out/GaelcoLoader.AppImage" out/GaelcoLoader-x86_64.AppImage
+          docker rm "$cid"
+
+      - name: Stage release asset
+        run: |
+          ( cd out && sha256sum GaelcoLoader-x86_64.AppImage > GaelcoLoader-x86_64.AppImage.sha256 )
+          ls -la out
+          file out/GaelcoLoader-x86_64.AppImage
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GaelcoLoader-AppImage
+          path: out/*
+          if-no-files-found: error
+
+      # --- master push: keep a single rolling "continuous" prerelease -------
+      - name: Move rolling tag
+        if: github.ref == 'refs/heads/master'
+        run: |
+          git tag -f continuous
+          git push -f origin continuous
+
+      - name: Publish continuous release
+        if: github.ref == 'refs/heads/master'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: continuous
+          name: Continuous build
+          body: |
+            Rolling build of the latest `master` (${{ github.sha }}).
+
+            Download `GaelcoLoader-x86_64.AppImage`, `chmod +x` it and run.
+          prerelease: true
+          make_latest: false
+          files: out/*
+
+      # --- v* tag push: a normal, permanent release ------------------------
+      - name: Publish tagged release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          make_latest: true
+          files: out/*
